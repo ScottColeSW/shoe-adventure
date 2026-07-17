@@ -18,8 +18,25 @@ import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { gameAssets } from "./assets";
 
 export type GameMode = "title" | "playing" | "paused" | "won" | "lost";
-type PickupKind = "button" | "feather" | "dash" | "heart" | "moon" | "chrome" | "moonstep" | "lash" | "gum";
-type ShoeForm = "starter" | "coralChrome" | "moonstep";
+type PickupKind =
+  | "button"
+  | "feather"
+  | "dash"
+  | "heart"
+  | "moon"
+  | "chrome"
+  | "moonstep"
+  | "lash"
+  | "gum"
+  | "superJump"
+  | "bonus"
+  | "pump"
+  | "hightop"
+  | "loafer"
+  | "cowboy"
+  | "sneaker"
+  | "ultra";
+type ShoeForm = "starter" | "coralChrome" | "moonstep" | "pump" | "hightop" | "loafer" | "cowboy" | "sneaker";
 type EnemyKind = "lace" | "slime" | "skate";
 type ContraptionKind = "buttonRun" | "laceLever" | "gumPress" | "spoolLift";
 type GameCommand =
@@ -30,6 +47,8 @@ type GameCommand =
   | "dash"
   | "lash"
   | "stomp"
+  | "formAttack"
+  | "ultra"
   | "holdLeft"
   | "holdRight"
   | "releaseLeft"
@@ -62,6 +81,8 @@ interface PlayerState {
   doubleJumps: number;
   dashCharges: number;
   moonTimer: number;
+  superJump: boolean;
+  superJumpTimer: number;
   shoeForm: ShoeForm;
   laceLash: boolean;
   gumStomp: boolean;
@@ -69,6 +90,12 @@ interface PlayerState {
   stompCooldown: number;
   lashTimer: number;
   stompTimer: number;
+  formAttackTimer: number;
+  formAttackCooldown: number;
+  formShieldTimer: number;
+  ultraMove: boolean;
+  ultraTimer: number;
+  ultraCooldown: number;
 }
 
 interface Enemy {
@@ -83,6 +110,8 @@ interface Enemy {
   height: number;
   alive: boolean;
   phase: number;
+  bossTier?: "mini" | "boss";
+  bossName?: string;
 }
 
 interface Pickup {
@@ -133,6 +162,13 @@ export interface UiSnapshot {
   shoeForm: ShoeForm;
   laceLash: boolean;
   gumStomp: boolean;
+  superJump: boolean;
+  shoeFormAttack: string;
+  formAttackReady: boolean;
+  ultraMove: boolean;
+  bossName: string;
+  bossDefeated: boolean;
+  reunionSeconds: number;
   contraptionsActivated: number;
   contraptionStatus: string;
 }
@@ -175,6 +211,8 @@ export class GameWorld {
   private superRun = false;
   private superRunAction = "AI standing by.";
   private superRunKickTimer = 0;
+  private bossDefeated = false;
+  private reunionTimer = 0;
   private lastUiSignature = "";
   private titleTime = 0;
   private leftShoe: TransformNode | null = null;
@@ -519,26 +557,29 @@ export class GameWorld {
     knot.position = new Vector3(-0.36, 0.94, -0.45);
     knot.material = this.createMaterial("rightHeartEyeletMat", GOLD, new Color3(0.56, 0.22, 0.03));
 
-    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
+    // Keep the crafted shoe body intentionally visible beneath the sprite so the hero never reads as translucent.
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.94; });
     this.heroSprite = this.addFootwearBillboard(
       "rightShoeRealisticSprite",
       gameAssets.rightShoeRealistic,
       root,
-      2.42,
-      1.86,
+      2.56,
+      1.98,
       new Vector3(0.06, 0.9, -0.64),
       RESCUE_CORAL,
     );
     this.heroSpriteMaterial = this.heroSprite.material as StandardMaterial;
-    this.heroSpriteMaterial.emissiveColor = RESCUE_CORAL.scale(0.34);
-    this.heroSpriteMaterial.specularColor = new Color3(1, 0.92, 0.78);
-    this.heroSpriteMaterial.specularPower = 96;
+    this.heroSpriteMaterial.alpha = 1;
+    this.heroSpriteMaterial.emissiveColor = RESCUE_CORAL.scale(0.22);
+    this.heroSpriteMaterial.specularColor = new Color3(1, 0.96, 0.84);
+    this.heroSpriteMaterial.specularPower = 128;
 
     const halo = MeshBuilder.CreateDisc("rightShoeGlowHalo", { radius: 1.34, tessellation: 40 }, this.scene);
     halo.parent = root;
     halo.position = new Vector3(0.08, 0.84, -0.72);
     const haloMaterial = this.createMaterial("rightShoeGlowHaloMat", RESCUE_CORAL, GOLD);
-    haloMaterial.alpha = 0.19;
+    // The halo is deliberately restrained: it frames the hero instead of bleaching through it.
+    haloMaterial.alpha = 0.1;
     haloMaterial.backFaceCulling = false;
     halo.material = haloMaterial;
     halo.isPickable = false;
@@ -561,6 +602,8 @@ export class GameWorld {
       doubleJumps: 0,
       dashCharges: 0,
       moonTimer: 0,
+      superJump: false,
+      superJumpTimer: 0,
       shoeForm: "starter",
       laceLash: false,
       gumStomp: false,
@@ -568,15 +611,34 @@ export class GameWorld {
       stompCooldown: 0,
       lashTimer: 0,
       stompTimer: 0,
+      formAttackTimer: 0,
+      formAttackCooldown: 0,
+      formShieldTimer: 0,
+      ultraMove: false,
+      ultraTimer: 0,
+      ultraCooldown: 0,
     };
   }
 
   private createEnemies() {
+    // Each transformation gate has two light foes just beyond it, so its instant move reads clearly in motion.
+    this.enemies.push(this.createLaceGoblin(8.05, -4.2, 7.7, 8.4));
+    this.enemies.push(this.createSlime(8.9, -4.2, 8.55, 9.25));
+    this.enemies.push(this.createLaceGoblin(17.18, -2.8, 16.8, 17.55));
+    this.enemies.push(this.createSlime(17.88, -2.8, 17.58, 18.12));
+    this.enemies.push(this.createLaceGoblin(27.45, -2.45, 27.1, 27.85));
+    this.enemies.push(this.createSlime(28.22, -2.45, 27.92, 28.6));
+    this.enemies.push(this.createLaceGoblin(40.92, 0.25, 40.55, 41.28));
+    this.enemies.push(this.createSlime(41.42, 0.25, 41.18, 41.7));
+    this.enemies.push(this.createLaceGoblin(47.78, -1.2, 47.42, 48.16));
+    this.enemies.push(this.createSlime(48.45, -1.2, 48.16, 48.9));
     this.enemies.push(this.createLaceGoblin(11.8, -4.2, 8.5, 14.2));
     this.enemies.push(this.createSlime(23.4, -1.25, 20.2, 23.4));
-    this.enemies.push(this.createRollerSkate(41.4, 0.55, 39.9, 43.5));
+    this.enemies.push(this.createMiniBoss(41.9, 0.55, 39.9, 43.7, "Lace Captain"));
+    this.enemies.push(this.createLaceGoblin(49.3, -1.2, 47.8, 50.0));
     this.enemies.push(this.createLaceGoblin(50.2, -4.2, 47.6, 53.6));
-    this.enemies.push(this.createRollerSkate(56.7, 2.4, 55.2, 58.1));
+    this.enemies.push(this.createMiniBoss(56.7, 2.4, 55.2, 58.1, "Gum Marshal"));
+    this.enemies.push(this.createTrueBoss(59.05, 2.4, 58.3, 59.55));
   }
 
   private createLaceGoblin(x: number, bottom: number, minX: number, maxX: number): Enemy {
@@ -653,20 +715,64 @@ export class GameWorld {
     return { kind: "skate", root, x, bottom, minX, maxX, speed: 1.08, width: 1.12, height: 1.08, alive: true, phase: x };
   }
 
+  private createMiniBoss(x: number, bottom: number, minX: number, maxX: number, bossName: string): Enemy {
+    const boss = this.createRollerSkate(x, bottom, minX, maxX);
+    boss.bossTier = "mini";
+    boss.bossName = bossName;
+    boss.width = 1.38;
+    boss.height = 1.34;
+    boss.speed *= 0.76;
+    boss.root.scaling.y = 1.24;
+    boss.root.scaling.z = 1.24;
+    const crown = MeshBuilder.CreateTorus(`miniBossCrown-${x}`, { diameter: 0.65, thickness: 0.075, tessellation: 18 }, this.scene);
+    crown.parent = boss.root;
+    crown.position = new Vector3(0, 1.44, -0.62);
+    crown.material = this.createMaterial(`miniBossCrownMat-${x}`, GOLD, RESCUE_CORAL);
+    return boss;
+  }
+
+  private createTrueBoss(x: number, bottom: number, minX: number, maxX: number): Enemy {
+    const boss = this.createRollerSkate(x, bottom, minX, maxX);
+    boss.bossTier = "boss";
+    boss.bossName = "The Tangled Titan";
+    boss.width = 2.18;
+    boss.height = 2.08;
+    boss.speed *= 0.44;
+    boss.root.scaling = new Vector3(1.72, 1.72, 1.72);
+    const halo = MeshBuilder.CreateTorus(`trueBossHalo-${x}`, { diameter: 1.46, thickness: 0.12, tessellation: 24 }, this.scene);
+    halo.parent = boss.root;
+    halo.position = new Vector3(0, 1.42, -0.66);
+    halo.material = this.createMaterial(`trueBossHaloMat-${x}`, VIOLET, RESCUE_CORAL);
+    const spike = MeshBuilder.CreateCylinder(`trueBossSpur-${x}`, { height: 0.56, diameterTop: 0, diameterBottom: 0.38, tessellation: 12 }, this.scene);
+    spike.parent = boss.root;
+    spike.position = new Vector3(0.72, 0.92, -0.64);
+    spike.rotation.z = -Math.PI / 2;
+    spike.material = this.createMaterial(`trueBossSpurMat-${x}`, GOLD, CREAM);
+    return boss;
+  }
+
   private createPickups() {
     const buttonPositions = [2.7, 4.6, 6.5, 10.3, 14.5, 17.4, 20.2, 27.2, 32.8, 38.5, 45.7, 54.6, 60.2];
     buttonPositions.forEach((x, index) => {
       const y = index > 8 ? -2.95 : -3.1;
       this.pickups.push(this.createPickup("button", x, y + (index % 3) * 0.24));
     });
+    this.pickups.push(this.createPickup("pump", 7.15, -3.45));
     this.pickups.push(this.createPickup("feather", 8.4, -2.7));
+    this.pickups.push(this.createPickup("superJump", 12.2, -1.4));
+    this.pickups.push(this.createPickup("bonus", 15.4, 0.55));
+    this.pickups.push(this.createPickup("hightop", 16.35, -2.1));
     this.pickups.push(this.createPickup("dash", 19.4, -2.05));
+    this.pickups.push(this.createPickup("loafer", 26.6, -1.75));
     this.pickups.push(this.createPickup("heart", 34.3, -0.55));
     this.pickups.push(this.createPickup("moon", 47.2, -0.82));
+    this.pickups.push(this.createPickup("sneaker", 47.02, -0.5));
     this.pickups.push(this.createPickup("feather", 53.1, 2.0));
     this.pickups.push(this.createPickup("dash", 58.1, 3.0));
+    this.pickups.push(this.createPickup("ultra", 58.45, 3.1));
     this.pickups.push(this.createPickup("chrome", 13.0, -2.5));
     this.pickups.push(this.createPickup("moonstep", 30.2, -2.2));
+    this.pickups.push(this.createPickup("cowboy", 40.1, 0.95));
     this.pickups.push(this.createPickup("lash", 42.0, 0.75));
     this.pickups.push(this.createPickup("gum", 55.0, 2.95));
   }
@@ -706,10 +812,66 @@ export class GameWorld {
     } else if (kind === "moonstep") {
       icon = MeshBuilder.CreateTorus(`moonstepPatch-${x}`, { diameter: 0.7, thickness: 0.16, tessellation: 24 }, this.scene);
       icon.material = this.createMaterial(`moonstepPatchMat-${x}`, CYAN, new Color3(0.1, 0.22, 0.74));
+    } else if (kind === "pump") {
+      icon = MeshBuilder.CreateBox(`pumpCharm-${x}`, { width: 0.7, height: 0.25, depth: 0.18 }, this.scene);
+      icon.rotation.z = -0.16;
+      icon.material = this.createMaterial(`pumpCharmMat-${x}`, RESCUE_CORAL, GOLD);
+      const heel = MeshBuilder.CreateBox(`pumpHeel-${x}`, { width: 0.14, height: 0.48, depth: 0.16 }, this.scene);
+      heel.parent = root;
+      heel.position = new Vector3(-0.23, -0.2, -0.22);
+      heel.material = this.createMaterial(`pumpHeelMat-${x}`, RESCUE_CORAL, GOLD);
+    } else if (kind === "hightop") {
+      icon = MeshBuilder.CreateBox(`hightopCharm-${x}`, { width: 0.6, height: 0.62, depth: 0.18 }, this.scene);
+      icon.scaling = new Vector3(1, 1.15, 1);
+      icon.material = this.createMaterial(`hightopCharmMat-${x}`, CYAN, CREAM);
+      const collar = MeshBuilder.CreateTorus(`hightopCollar-${x}`, { diameter: 0.48, thickness: 0.08, tessellation: 18 }, this.scene);
+      collar.parent = root;
+      collar.position = new Vector3(0, 0.3, -0.22);
+      collar.material = this.createMaterial(`hightopCollarMat-${x}`, CREAM, CYAN);
+    } else if (kind === "loafer") {
+      icon = MeshBuilder.CreateSphere(`loaferCharm-${x}`, { diameter: 0.72, segments: 20 }, this.scene);
+      icon.scaling = new Vector3(1.18, 0.5, 0.28);
+      icon.material = this.createMaterial(`loaferCharmMat-${x}`, MOSS, GOLD);
+      const tassel = MeshBuilder.CreateSphere(`loaferTassel-${x}`, { diameter: 0.18, segments: 12 }, this.scene);
+      tassel.parent = root;
+      tassel.position = new Vector3(0.2, 0.1, -0.25);
+      tassel.material = this.createMaterial(`loaferTasselMat-${x}`, GOLD, CREAM);
+    } else if (kind === "cowboy") {
+      icon = MeshBuilder.CreateBox(`cowboyCharm-${x}`, { width: 0.58, height: 0.78, depth: 0.18 }, this.scene);
+      icon.rotation.z = -0.1;
+      icon.material = this.createMaterial(`cowboyCharmMat-${x}`, new Color3(0.62, 0.24, 0.08), GOLD);
+      const spur = MeshBuilder.CreateTorus(`cowboySpur-${x}`, { diameter: 0.33, thickness: 0.075, tessellation: 16 }, this.scene);
+      spur.parent = root;
+      spur.position = new Vector3(-0.37, -0.18, -0.22);
+      spur.material = this.createMaterial(`cowboySpurMat-${x}`, GOLD, CREAM);
+    } else if (kind === "sneaker") {
+      icon = MeshBuilder.CreateSphere(`sneakerCharm-${x}`, { diameter: 0.72, segments: 20 }, this.scene);
+      icon.scaling = new Vector3(1.18, 0.48, 0.3);
+      icon.material = this.createMaterial(`sneakerCharmMat-${x}`, VIOLET, CYAN);
+      const stripe = MeshBuilder.CreateBox(`sneakerStripe-${x}`, { width: 0.5, height: 0.08, depth: 0.07 }, this.scene);
+      stripe.parent = root;
+      stripe.position = new Vector3(0.08, 0.08, -0.25);
+      stripe.rotation.z = -0.28;
+      stripe.material = this.createMaterial(`sneakerStripeMat-${x}`, CREAM, CYAN);
+    } else if (kind === "ultra") {
+      icon = MeshBuilder.CreateTorus(`ultraMoveCore-${x}`, { diameter: 0.88, thickness: 0.16, tessellation: 28 }, this.scene);
+      icon.material = this.createMaterial(`ultraMoveCoreMat-${x}`, VIOLET, GOLD);
+      const core = MeshBuilder.CreateSphere(`ultraMoveStar-${x}`, { diameter: 0.36, segments: 16 }, this.scene);
+      core.parent = root;
+      core.position = new Vector3(0, 0, -0.28);
+      core.material = this.createMaterial(`ultraMoveStarMat-${x}`, GOLD, CREAM);
     } else if (kind === "lash") {
       icon = MeshBuilder.CreateTorus(`laceLashPatch-${x}`, { diameter: 0.74, thickness: 0.105, tessellation: 24 }, this.scene);
       icon.scaling = new Vector3(1.05, 0.62, 1);
       icon.material = this.createMaterial(`laceLashPatchMat-${x}`, CREAM, RESCUE_CORAL);
+    } else if (kind === "superJump") {
+      icon = MeshBuilder.CreateTorus(`superJumpPatch-${x}`, { diameter: 0.78, thickness: 0.14, tessellation: 24 }, this.scene);
+      icon.scaling = new Vector3(0.88, 1.14, 1);
+      icon.material = this.createMaterial(`superJumpPatchMat-${x}`, GOLD, CYAN);
+    } else if (kind === "bonus") {
+      icon = MeshBuilder.CreateSphere(`bonusCapture-${x}`, { diameter: 0.56, segments: 20 }, this.scene);
+      icon.scaling = new Vector3(1, 1.18, 0.32);
+      icon.material = this.createMaterial(`bonusCaptureMat-${x}`, CYAN, GOLD);
     } else {
       icon = MeshBuilder.CreateDisc(`gumStompPatch-${x}`, { radius: 0.34, tessellation: 24 }, this.scene);
       icon.material = this.createMaterial(`gumStompPatchMat-${x}`, MOSS, new Color3(0.88, 0.16, 0.44));
@@ -815,7 +977,7 @@ export class GameWorld {
 
   private onKeyDown(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
-    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "q", "e", "shift", "r", "escape"].includes(key)) {
+    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "q", "e", "f", "u", "shift", "r", "escape"].includes(key)) {
       event.preventDefault();
     }
     if (this.superRun && key !== "escape") return;
@@ -825,6 +987,8 @@ export class GameWorld {
     if (key === "shift") this.tryDash();
     if (key === "q") this.tryLaceLash();
     if (key === "e") this.tryGumStomp();
+    if (key === "f") this.tryShoeFormAttack();
+    if (key === "u") this.tryUltraMove();
     if (key === "r") this.restart();
     if (key === "escape") this.togglePause();
     if ((key === "enter" || key === " ") && this.mode === "title") this.start();
@@ -845,6 +1009,8 @@ export class GameWorld {
     if (command === "dash") this.tryDash();
     if (command === "lash") this.tryLaceLash();
     if (command === "stomp") this.tryGumStomp();
+    if (command === "formAttack") this.tryShoeFormAttack();
+    if (command === "ultra") this.tryUltraMove();
     if (command === "holdLeft") this.held.left = true;
     if (command === "holdRight") this.held.right = true;
     if (command === "superRun") this.startSuperRun();
@@ -907,6 +1073,8 @@ export class GameWorld {
     this.player.doubleJumps = 0;
     this.player.dashCharges = 0;
     this.player.moonTimer = 0;
+    this.player.superJump = false;
+    this.player.superJumpTimer = 0;
     this.player.shoeForm = "starter";
     this.player.laceLash = false;
     this.player.gumStomp = false;
@@ -914,6 +1082,14 @@ export class GameWorld {
     this.player.stompCooldown = 0;
     this.player.lashTimer = 0;
     this.player.stompTimer = 0;
+    this.player.formAttackTimer = 0;
+    this.player.formAttackCooldown = 0;
+    this.player.formShieldTimer = 0;
+    this.player.ultraMove = false;
+    this.player.ultraTimer = 0;
+    this.player.ultraCooldown = 0;
+    this.bossDefeated = false;
+    this.reunionTimer = 0;
     this.applyShoeForm("starter");
     this.player.invulnerable = 2;
     this.player.jumpUsed = false;
@@ -937,6 +1113,7 @@ export class GameWorld {
 
   private previewReunion() {
     this.superRun = false;
+    this.reunionTimer = 6;
     this.mode = "won";
     this.message = "Pair restored! Right Shoe and Left Shoe dance their stitches home.";
     this.held.left = false;
@@ -953,10 +1130,13 @@ export class GameWorld {
     }
     if (this.mode !== "playing") return;
     if (this.player.grounded) {
-      this.player.vy = 8.9;
+      const jumpPower = this.player.superJump ? 12.6 : 8.9;
+      this.player.vy = jumpPower;
+      this.player.superJumpTimer = this.player.superJump ? 0.46 : 0;
       this.player.grounded = false;
       this.player.jumpUsed = false;
-      this.spawnSparks(this.player.x - this.player.facing * 0.35, this.player.bottom + 0.18, CREAM, 6, 1.7);
+      this.message = this.player.superJump ? "SUPER JUMP! Right Shoe launches toward the bonus lane." : this.message;
+      this.spawnSparks(this.player.x - this.player.facing * 0.35, this.player.bottom + 0.18, this.player.superJump ? CYAN : CREAM, this.player.superJump ? 16 : 6, this.player.superJump ? 3.3 : 1.7);
     } else if (!this.player.jumpUsed && this.player.doubleJumps > 0) {
       this.player.doubleJumps -= 1;
       this.player.jumpUsed = true;
@@ -981,28 +1161,125 @@ export class GameWorld {
 
   private applyShoeForm(form: ShoeForm) {
     this.player.shoeForm = form;
+    const styles: Record<ShoeForm, { glow: Color3; y: number; z: number }> = {
+      starter: { glow: RESCUE_CORAL, y: 1, z: 1 },
+      coralChrome: { glow: GOLD, y: 1, z: 1.04 },
+      moonstep: { glow: CYAN, y: 1.07, z: 1 },
+      pump: { glow: RESCUE_CORAL, y: 1.1, z: 0.94 },
+      hightop: { glow: CYAN, y: 1.16, z: 1.04 },
+      loafer: { glow: MOSS, y: 0.94, z: 1.12 },
+      cowboy: { glow: new Color3(0.9, 0.38, 0.08), y: 1.14, z: 1.08 },
+      sneaker: { glow: VIOLET, y: 1.02, z: 1.16 },
+    };
+    const style = styles[form];
     const asset = form === "coralChrome" ? gameAssets.rightShoeCoralChrome : form === "moonstep" ? gameAssets.rightShoeMoonstep : gameAssets.rightShoeRealistic;
-    const glow = form === "moonstep" ? CYAN : form === "coralChrome" ? GOLD : RESCUE_CORAL;
     if (this.heroSpriteMaterial) {
       const texture = new Texture(asset, this.scene);
       texture.hasAlpha = true;
       this.heroSpriteMaterial.diffuseTexture = texture;
       this.heroSpriteMaterial.opacityTexture = texture;
       this.heroSpriteMaterial.useAlphaFromDiffuseTexture = true;
-      this.heroSpriteMaterial.emissiveColor = glow.scale(form === "starter" ? 0.34 : 0.46);
+      this.heroSpriteMaterial.alpha = 1;
+      this.heroSpriteMaterial.emissiveColor = style.glow.scale(form === "starter" ? 0.22 : 0.38);
       this.heroSpriteMaterial.specularColor = new Color3(1, 0.95, 0.83);
-      this.heroSpriteMaterial.specularPower = form === "starter" ? 96 : 120;
+      this.heroSpriteMaterial.specularPower = form === "starter" ? 96 : 132;
     }
     if (this.heroHalo) {
       const material = this.heroHalo.material as StandardMaterial | null;
       if (material) {
-        material.diffuseColor = glow;
-        material.emissiveColor = glow.scale(0.46);
-        material.alpha = form === "starter" ? 0.19 : 0.3;
+        material.diffuseColor = style.glow;
+        material.emissiveColor = style.glow.scale(0.52);
+        material.alpha = form === "starter" ? 0.1 : 0.18;
       }
     }
-    this.player.root.scaling.y = form === "moonstep" ? 1.07 : 1;
-    this.player.root.scaling.z = form === "coralChrome" ? 1.04 : 1;
+    this.player.root.scaling.y = style.y;
+    this.player.root.scaling.z = style.z;
+  }
+
+  private shoeFormAttackLabel(form = this.player.shoeForm) {
+    const attacks: Partial<Record<ShoeForm, string>> = {
+      pump: "HEEL STRIKE",
+      hightop: "ANKLE GUARD",
+      loafer: "SLIP SLIDE",
+      cowboy: "SPUR KICK",
+      sneaker: "SPRINT BURST",
+    };
+    return attacks[form] ?? "";
+  }
+
+  private tryShoeFormAttack() {
+    const form = this.player.shoeForm;
+    const attack = this.shoeFormAttackLabel(form);
+    if (this.mode !== "playing" || !attack || this.player.formAttackCooldown > 0) return;
+
+    this.player.formAttackCooldown = form === "hightop" ? 1.25 : 0.8;
+    this.player.formAttackTimer = form === "hightop" ? 0.62 : 0.46;
+    this.player.invulnerable = Math.max(this.player.invulnerable, form === "hightop" ? 1.45 : 0.42);
+
+    const near = (range: number, forward = false) => this.enemies.filter((enemy) =>
+      enemy.alive && Math.abs(enemy.bottom - this.player.bottom) < 2.55 && Math.abs(enemy.x - this.player.x) < range && (!forward || (enemy.x - this.player.x) * this.player.facing > -0.28),
+    );
+    let targets: Enemy[] = [];
+    let color = RESCUE_CORAL;
+
+    if (form === "pump") {
+      targets = near(2.75).filter((enemy) => !enemy.bossTier);
+      color = RESCUE_CORAL;
+      if (this.player.grounded) this.player.vy = 4.9;
+      this.spawnSparks(this.player.x, this.player.bottom + 0.28, color, 28, 4.4);
+    }
+    if (form === "hightop") {
+      this.player.formShieldTimer = 1.45;
+      targets = near(1.65).filter((enemy) => !enemy.bossTier);
+      color = CYAN;
+      this.spawnSparks(this.player.x, this.player.bottom + 0.78, color, 22, 3.1);
+    }
+    if (form === "loafer") {
+      targets = near(3.45, true).filter((enemy) => !enemy.bossTier);
+      color = MOSS;
+      this.player.vx = this.player.facing * 16.5;
+      this.spawnSparks(this.player.x - this.player.facing * 0.35, this.player.bottom + 0.48, color, 20, 3.8);
+    }
+    if (form === "cowboy") {
+      targets = near(5.15, true).filter((enemy) => !enemy.bossTier);
+      color = GOLD;
+      this.player.vx = this.player.facing * 8.4;
+      this.spawnSparks(this.player.x + this.player.facing * 1.55, this.player.bottom + 0.78, color, 24, 4.6);
+    }
+    if (form === "sneaker") {
+      targets = near(4.9, true).filter((enemy) => enemy.bossTier !== "mini" && enemy.bossTier !== "boss");
+      color = VIOLET;
+      this.player.vx = this.player.facing * 21;
+      this.spawnSparks(this.player.x - this.player.facing * 0.44, this.player.bottom + 0.62, color, 26, 4.8);
+    }
+
+    targets.forEach((enemy) => this.defeatEnemy(enemy));
+    const suffix = targets.length > 0 ? `clears ${targets.length} shoe fiend${targets.length === 1 ? "" : "s"}.` : "charges the route ahead.";
+    this.message = `${attack} — ${suffix}`;
+    if (this.superRun) this.superRunAction = `${attack} — transformation attack demonstrated.`;
+    this.publishUi(true);
+  }
+
+  private tryUltraMove() {
+    if (this.mode !== "playing" || !this.player.ultraMove || this.player.ultraCooldown > 0) return;
+    const boss = this.enemies.find((enemy) =>
+      enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < 5.6 && Math.abs(enemy.bottom - this.player.bottom) < 7.4,
+    );
+    if (!boss) {
+      this.message = "ULTRA MOVE is charged — bring The Tangled Titan into the stitched strike lane.";
+      this.publishUi(true);
+      return;
+    }
+    this.player.ultraCooldown = 1.5;
+    this.player.ultraTimer = 0.95;
+    this.player.invulnerable = Math.max(this.player.invulnerable, 1.15);
+    this.player.vx = this.player.facing * 13.5;
+    this.spawnSparks(this.player.x + this.player.facing * 1.35, this.player.bottom + 0.82, VIOLET, 46, 5.5);
+    this.defeatEnemy(boss);
+    this.bossDefeated = true;
+    this.message = "ULTRA MOVE — PRISM SOLE BREAKER unravels The Tangled Titan!";
+    if (this.superRun) this.superRunAction = "ULTRA MOVE — Prismatic Sole Breaker opens Left Shoe’s tower.";
+    this.publishUi(true);
   }
 
   private tryLaceLash() {
@@ -1164,14 +1441,26 @@ export class GameWorld {
     this.held.left = false;
     this.held.right = this.player.x < 63.2;
 
+    if (this.player.x >= 6.65) this.claimSuperRunPowerup("pump", "PUMP FORM — Heel Strike clears the starter pair.");
     if (this.player.x >= 6.6) this.claimSuperRunPowerup("feather", "WINGTIP FLIGHT — double-jump unlocked.");
+    if (!this.player.grounded && !this.player.jumpUsed && this.player.doubleJumps > 0 && this.player.x >= 8.3 && this.player.x <= 10.6) {
+      this.tryJump();
+      this.superRunAction = "DOUBLE JUMP — Wingtip Feather carries Right Shoe to the Super Jump patch.";
+    }
+    if (this.player.x >= 11.7) this.claimSuperRunPowerup("superJump", "SUPER JUMP PATCH — spring-loaded soles armed.");
     if (this.player.x >= 12.8) this.claimSuperRunPowerup("chrome", "CORAL CHROME — hero shine upgraded.");
+    if (this.player.superJump && this.player.x >= 15.0 && this.player.vy > 1.5) this.claimSuperRunPowerup("bonus", "BONUS CAPTURE — Super Jump snatched the Sky Stitch cache!");
+    if (this.player.x >= 16.0) this.claimSuperRunPowerup("hightop", "HIGHTOP FORM — Ankle Guard counters the elevated pair.");
     if (this.player.x >= 18.8) this.claimSuperRunPowerup("dash", "LACE DASH — coral boost charged.");
+    if (this.player.x >= 26.15) this.claimSuperRunPowerup("loafer", "LOAFER FORM — Slip Slide sweeps the laundry ledge.");
     if (this.player.x >= 30.0) this.claimSuperRunPowerup("moonstep", "MOONSTEP RUNNER — cobalt speed form unlocked.");
     if (this.player.x >= 33.1) this.claimSuperRunPowerup("heart", "HEART SOLE — route integrity restored.");
-    if (this.player.x >= 41.7) this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
+    if (this.player.x >= 39.75) this.claimSuperRunPowerup("cowboy", "COWBOY BOOT FORM — Spur Kick clears the bridge sentries.");
+    if (this.player.x >= 40.5) this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
     if (this.player.x >= 45.8) this.claimSuperRunPowerup("moon", "MOON INSOLE — enemies slowed for the finale.");
+    if (this.player.x >= 46.75) this.claimSuperRunPowerup("sneaker", "SNEAKER FORM — Sprint Burst chains through the final pair.");
     if (this.player.x >= 54.8) this.claimSuperRunPowerup("gum", "GUM STOMP — sticky sole impact armed.");
+    if (this.player.x >= 58.2) this.claimSuperRunPowerup("ultra", "ULTRA MOVE — Prismatic Sole Breaker locks onto The Tangled Titan.");
 
     const platformAhead = this.platforms.some(
       (platform) =>
@@ -1179,18 +1468,33 @@ export class GameWorld {
         platform.x - platform.width / 2 - this.player.x < 2.35 &&
         platform.top > this.player.bottom + 0.18,
     );
-    const showcaseBeat = [7.4, 15.1, 21.1, 28.0, 35.1, 42.0, 51.1, 58.0].some((beat) => Math.abs(this.player.x - beat) < 0.16);
+    const showcaseBeat = [7.15, 13.3, 16.35, 21.1, 26.6, 35.1, 40.1, 42.0, 47.0, 51.1, 58.0].some((beat) => Math.abs(this.player.x - beat) < 0.16);
     if (this.player.grounded && (platformAhead || showcaseBeat)) this.tryJump();
     if (this.player.x > 19.4 && this.player.x < 25.6 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) {
       this.superRunAction = "LACE DASH — cutting through the laundry lane.";
       this.tryDash();
     }
 
+    const bossInUltraRange = this.enemies.find(
+      (enemy) => enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < 5.6,
+    );
+    if (bossInUltraRange && this.player.ultraMove && this.player.ultraCooldown <= 0) this.tryUltraMove();
+
     const target = this.enemies.find(
       (enemy) => enemy.alive && enemy.x - this.player.x < 1.38 && enemy.x >= this.player.x - 0.8,
     );
     if (target) {
-      if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) {
+      if (target.bossTier === "boss" && this.player.ultraMove && this.player.ultraCooldown <= 0) {
+        this.tryUltraMove();
+      } else if (target.bossTier === "boss") {
+        this.superRunAction = "BOSS GATE — the AI is lining up the Ultra Move core.";
+      } else if (target.bossTier === "mini" && this.player.laceLash && this.player.x < 49 && this.player.lashCooldown <= 0) {
+        this.tryLaceLash();
+        this.superRunAction = `MINI-BOSS: ${target.bossName} — Lace Lash breaks the skate guard.`;
+      } else if (target.bossTier === "mini" && this.player.gumStomp && this.player.stompCooldown <= 0) {
+        this.tryGumStomp();
+        this.superRunAction = `MINI-BOSS: ${target.bossName} — Gum Stomp launches the final clearance.`;
+      } else if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) {
         this.tryGumStomp();
         this.superRunAction = "GUM STOMP — rogue footwear pinned by a sticky sole burst.";
       } else if (this.player.laceLash && this.player.lashCooldown <= 0) {
@@ -1207,13 +1511,14 @@ export class GameWorld {
     const pickup = this.pickups.find((candidate) => candidate.kind === kind && !candidate.collected);
     if (!pickup) return;
     this.collectPickup(pickup);
-    this.superRunAction = callout;
-    this.message = `AI SUPER RUN: ${callout}`;
+    const formPickup = kind === "pump" || kind === "hightop" || kind === "loafer" || kind === "cowboy" || kind === "sneaker";
+    this.superRunAction = formPickup ? `${callout} Attack fires on pickup.` : callout;
+    this.message = `AI SUPER RUN: ${this.superRunAction}`;
   }
 
   private performSuperKick(enemy: Enemy) {
-    if (!enemy.alive) return;
-    const move = enemy.kind === "skate" ? "TURBO HEEL KICK" : enemy.kind === "slime" ? "CRESCENT SOLE KICK" : "SOLE-FLIP KICK";
+    if (!enemy.alive || enemy.bossTier === "boss") return;
+    const move = enemy.bossTier === "mini" ? "MINI-BOSS HEEL BREAK" : enemy.kind === "skate" ? "TURBO HEEL KICK" : enemy.kind === "slime" ? "CRESCENT SOLE KICK" : "SOLE-FLIP KICK";
     if (enemy.kind === "skate" && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
     this.superRunKickTimer = 0.52;
     this.defeatEnemy(enemy);
@@ -1231,10 +1536,17 @@ export class GameWorld {
     this.player.stompCooldown = Math.max(0, this.player.stompCooldown - delta);
     this.player.lashTimer = Math.max(0, this.player.lashTimer - delta);
     this.player.stompTimer = Math.max(0, this.player.stompTimer - delta);
+    this.player.formAttackTimer = Math.max(0, this.player.formAttackTimer - delta);
+    this.player.formAttackCooldown = Math.max(0, this.player.formAttackCooldown - delta);
+    this.player.formShieldTimer = Math.max(0, this.player.formShieldTimer - delta);
+    this.player.ultraTimer = Math.max(0, this.player.ultraTimer - delta);
+    this.player.ultraCooldown = Math.max(0, this.player.ultraCooldown - delta);
+    this.player.superJumpTimer = Math.max(0, this.player.superJumpTimer - delta);
     this.player.moonTimer = Math.max(0, this.player.moonTimer - delta);
 
     const direction = (this.held.right ? 1 : 0) - (this.held.left ? 1 : 0);
-    const targetSpeed = this.player.dashTimer > 0 ? this.player.facing * 19 : direction * 6.4;
+    const formDashSpeed = this.player.shoeForm === "sneaker" ? 21 : this.player.shoeForm === "loafer" ? 16.5 : 0;
+    const targetSpeed = this.player.dashTimer > 0 ? this.player.facing * 19 : this.player.formAttackTimer > 0 && formDashSpeed > 0 ? this.player.facing * formDashSpeed : direction * 6.4;
     const response = this.player.grounded ? 18 : 10;
     this.player.vx += (targetSpeed - this.player.vx) * Math.min(1, response * delta);
     if (direction !== 0) this.player.facing = direction > 0 ? 1 : -1;
@@ -1268,8 +1580,11 @@ export class GameWorld {
     this.player.root.scaling.x = this.player.facing;
     this.player.root.rotation.z = Math.max(-0.18, Math.min(0.18, -this.player.vx * 0.016));
     if (this.superRunKickTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.62;
+    if (this.player.ultraTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.76;
+    if (this.player.formAttackTimer > 0) this.player.root.rotation.z = this.player.shoeForm === "pump" ? this.player.facing * 0.38 : -this.player.facing * 0.48;
     if (this.player.lashTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.4;
     if (this.player.stompTimer > 0) this.player.root.rotation.z = this.player.facing * 0.16;
+    if (this.player.superJumpTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.2;
     if (this.heroHalo) {
       const pulse = 1 + Math.sin(this.titleTime * 7.4) * 0.06 + (this.player.shoeForm === "starter" ? 0 : 0.07);
       this.heroHalo.scaling = new Vector3(pulse, pulse, 1);
@@ -1279,6 +1594,16 @@ export class GameWorld {
     }
     if (this.player.lashTimer > 0) {
       this.spawnSparks(this.player.x + this.player.facing * 1.15, this.player.bottom + 0.8, CREAM, 1, 1.2);
+    }
+    if (this.player.formAttackTimer > 0 && this.player.shoeForm !== "hightop") {
+      const formColor = this.player.shoeForm === "loafer" ? MOSS : this.player.shoeForm === "cowboy" ? GOLD : this.player.shoeForm === "sneaker" ? VIOLET : RESCUE_CORAL;
+      this.spawnSparks(this.player.x - this.player.facing * 0.34, this.player.bottom + 0.56, formColor, 1, 1.55);
+    }
+    if (this.player.ultraTimer > 0) {
+      this.spawnSparks(this.player.x - this.player.facing * 0.36, this.player.bottom + 0.82, VIOLET, 2, 2.2);
+    }
+    if (this.player.superJumpTimer > 0) {
+      this.spawnSparks(this.player.x - this.player.facing * 0.35, this.player.bottom + 0.3, CYAN, 1, 1.7);
     }
   }
 
@@ -1302,9 +1627,9 @@ export class GameWorld {
       const enemyTop = enemy.bottom + enemy.height;
       const stomp = horizontal && this.player.vy < -1.5 && this.player.bottom <= enemyTop + 0.28 && playerTop >= enemy.bottom;
       const sideHit = horizontal && this.player.bottom < enemyTop - 0.08 && playerTop > enemy.bottom + 0.12;
-      if (stomp) {
+      if (stomp && enemy.bossTier !== "boss") {
         this.defeatEnemy(enemy);
-      } else if (sideHit && this.player.dashTimer <= 0) {
+      } else if (sideHit && this.player.dashTimer <= 0 && this.player.formShieldTimer <= 0 && this.player.ultraTimer <= 0) {
         this.damagePlayer(enemy.kind === "skate" ? "Rogue skate clipped the rescue route." : "A shoe fiend knocked Right Shoe back.");
       }
     }
@@ -1351,7 +1676,12 @@ export class GameWorld {
     }
   }
 
-  private updateDecor(_delta: number) {
+  private updateDecor(delta: number) {
+    if (this.mode === "won" && this.reunionTimer > 0) {
+      const before = Math.ceil(this.reunionTimer);
+      this.reunionTimer = Math.max(0, this.reunionTimer - delta);
+      if (before !== Math.ceil(this.reunionTimer)) this.publishUi(false);
+    }
     this.parallax.forEach((mesh, index) => {
       mesh.position.x += Math.sin(this.titleTime * 0.23 + index) * 0.0007;
     });
@@ -1372,9 +1702,15 @@ export class GameWorld {
     enemy.alive = false;
     enemy.root.setEnabled(false);
     this.player.vy = 6.1;
-    this.buttons += 4;
-    this.message = "Sole stomp! A rescue spark lights the way.";
-    this.spawnSparks(enemy.x, enemy.bottom + 0.6, GOLD, 16, 3.1);
+    if (enemy.bossTier === "boss") this.bossDefeated = true;
+    this.buttons += enemy.bossTier === "boss" ? 20 : enemy.bossTier === "mini" ? 8 : 4;
+    this.message = enemy.bossTier === "boss"
+      ? "BOSS DOWN: The Tangled Titan’s knot unravels from the rescue tower."
+      : enemy.bossTier === "mini"
+        ? `MINI-BOSS DOWN: ${enemy.bossName} clears the power route.`
+        : "Sole stomp! A rescue spark lights the way.";
+    const burst = enemy.bossTier === "boss" ? VIOLET : enemy.bossTier === "mini" ? RESCUE_CORAL : GOLD;
+    this.spawnSparks(enemy.x, enemy.bottom + 0.6, burst, enemy.bossTier === "boss" ? 46 : enemy.bossTier === "mini" ? 28 : 16, enemy.bossTier === "boss" ? 5.4 : enemy.bossTier === "mini" ? 4.2 : 3.1);
     this.publishUi(true);
   }
 
@@ -1429,6 +1765,17 @@ export class GameWorld {
       this.message = "Moon Insole: shoe fiends slow to a crawl.";
       this.spawnSparks(pickup.x, pickup.y, VIOLET, 18, 2.6);
     }
+    if (pickup.kind === "superJump") {
+      this.player.superJump = true;
+      this.message = "Super Jump Patch: hold the route, then launch into the sky-stitch bonus.";
+      this.spawnSparks(pickup.x, pickup.y, CYAN, 24, 3.4);
+    }
+    if (pickup.kind === "bonus") {
+      this.buttons += 12;
+      this.player.dashCharges += 1;
+      this.message = "Sky Stitch bonus captured! Lace Dash receives a bonus charge.";
+      this.spawnSparks(pickup.x, pickup.y, GOLD, 28, 3.8);
+    }
     if (pickup.kind === "chrome") {
       this.applyShoeForm("coralChrome");
       this.message = "Coral Chrome: Right Shoe shines brighter than the rescue stars.";
@@ -1438,6 +1785,41 @@ export class GameWorld {
       this.applyShoeForm("moonstep");
       this.message = "Moonstep Runner: a cobalt sneaker form is stitched in.";
       this.spawnSparks(pickup.x, pickup.y, CYAN, 24, 3.25);
+    }
+    if (pickup.kind === "pump") {
+      this.applyShoeForm("pump");
+      this.message = "Pump transformation: Heel Strike primes on contact.";
+      this.spawnSparks(pickup.x, pickup.y, RESCUE_CORAL, 28, 3.8);
+      this.tryShoeFormAttack();
+    }
+    if (pickup.kind === "hightop") {
+      this.applyShoeForm("hightop");
+      this.message = "Hightop transformation: Ankle Guard throws up a counter shield.";
+      this.spawnSparks(pickup.x, pickup.y, CYAN, 26, 3.7);
+      this.tryShoeFormAttack();
+    }
+    if (pickup.kind === "loafer") {
+      this.applyShoeForm("loafer");
+      this.message = "Loafer transformation: Slip Slide launches through the lane.";
+      this.spawnSparks(pickup.x, pickup.y, MOSS, 26, 3.9);
+      this.tryShoeFormAttack();
+    }
+    if (pickup.kind === "cowboy") {
+      this.applyShoeForm("cowboy");
+      this.message = "Cowboy Boot transformation: Spur Kick reaches across the shoebox gap.";
+      this.spawnSparks(pickup.x, pickup.y, GOLD, 28, 4.1);
+      this.tryShoeFormAttack();
+    }
+    if (pickup.kind === "sneaker") {
+      this.applyShoeForm("sneaker");
+      this.message = "Sneaker transformation: Sprint Burst chains through the final minor foes.";
+      this.spawnSparks(pickup.x, pickup.y, VIOLET, 28, 4.3);
+      this.tryShoeFormAttack();
+    }
+    if (pickup.kind === "ultra") {
+      this.player.ultraMove = true;
+      this.message = "ULTRA MOVE charged: press U or tap ULTRA when The Tangled Titan closes in.";
+      this.spawnSparks(pickup.x, pickup.y, VIOLET, 34, 4.8);
     }
     if (pickup.kind === "lash") {
       this.player.laceLash = true;
@@ -1454,7 +1836,17 @@ export class GameWorld {
 
   private checkRescue() {
     if (this.player.x < 60.7 || this.mode !== "playing") return;
+    const bossAlive = this.enemies.some((enemy) => enemy.alive && enemy.bossTier === "boss");
+    if (bossAlive && !this.bossDefeated) {
+      this.message = this.player.ultraMove
+        ? "The Tangled Titan blocks Left Shoe’s tower — fire ULTRA MOVE!"
+        : "The Tangled Titan blocks Left Shoe’s tower. Find the Ultra Move core!";
+      if (this.superRun) this.superRunAction = "BOSS GATE — scanning for the Ultra Move finishing lane.";
+      this.publishUi(true);
+      return;
+    }
     this.mode = "won";
+    this.reunionTimer = 6;
     this.superRunAction = this.superRun ? "PAIR RESTORED — BIG WIN!" : this.superRunAction;
     this.message = this.superRun ? "PAIR RESTORED! The AI Super Run found Left Shoe." : "Reunited! Right Shoe found the Left Shoe.";
     this.held.left = false;
@@ -1518,6 +1910,13 @@ export class GameWorld {
       shoeForm: this.player.shoeForm,
       laceLash: this.player.laceLash,
       gumStomp: this.player.gumStomp,
+      superJump: this.player.superJump,
+      shoeFormAttack: this.shoeFormAttackLabel(),
+      formAttackReady: Boolean(this.shoeFormAttackLabel()) && this.player.formAttackCooldown <= 0,
+      ultraMove: this.player.ultraMove,
+      bossName: this.bossDefeated ? "TOWER OPEN" : "THE TANGLED TITAN",
+      bossDefeated: this.bossDefeated,
+      reunionSeconds: Math.ceil(this.reunionTimer),
       contraptionsActivated,
       contraptionStatus,
     };

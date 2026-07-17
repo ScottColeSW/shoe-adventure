@@ -20,6 +20,13 @@ const initialSnapshot: UiSnapshot = {
   shoeForm: "starter",
   laceLash: false,
   gumStomp: false,
+  superJump: false,
+  shoeFormAttack: "",
+  formAttackReady: false,
+  ultraMove: false,
+  bossName: "THE TANGLED TITAN",
+  bossDefeated: false,
+  reunionSeconds: 0,
   contraptionsActivated: 0,
   contraptionStatus: "NEXT · BUTTON BALL RUN",
 };
@@ -32,6 +39,8 @@ type Command =
   | "dash"
   | "lash"
   | "stomp"
+  | "formAttack"
+  | "ultra"
   | "holdLeft"
   | "holdRight"
   | "releaseLeft"
@@ -105,7 +114,16 @@ export default function GameCanvas() {
     : snapshot.shoeForm === "coralChrome" || snapshot.mode === "title" || snapshot.mode === "won"
       ? gameAssets.rightShoeCoralChrome
       : gameAssets.rightShoeRealistic;
-  const heroFormLabel = snapshot.shoeForm === "moonstep" ? "MOONSTEP RUNNER" : snapshot.shoeForm === "coralChrome" ? "CORAL CHROME" : "BRIGHT STARTER";
+  const heroFormLabel = ({
+    starter: "BRIGHT STARTER",
+    coralChrome: "CORAL CHROME",
+    moonstep: "MOONSTEP RUNNER",
+    pump: "PUMP FORM",
+    hightop: "HIGHTOP FORM",
+    loafer: "LOAFER FORM",
+    cowboy: "COWBOY BOOT",
+    sneaker: "SNEAKER FORM",
+  } as const)[snapshot.shoeForm];
 
   return (
     <main
@@ -168,6 +186,9 @@ export default function GameCanvas() {
               <b>{snapshot.contraptionStatus}</b>
               <i>{snapshot.contraptionsActivated}/4 LIVE</i>
             </div>
+            <div className={`boss-readout ${snapshot.bossDefeated ? "boss-cleared" : ""}`} aria-label={`Final encounter: ${snapshot.bossName}`}>
+              <span>FINAL GATE</span><b>{snapshot.bossName}</b>
+            </div>
           </div>
 
           <div className="hud-powerups stitched-panel" aria-label="Collected power-ups">
@@ -179,8 +200,11 @@ export default function GameCanvas() {
             </div>
             <div className="upgrade-readout">
               <b>{heroFormLabel}</b>
+              <span className={snapshot.superJump ? "upgrade-unlocked super-jump-chip" : ""}>⇧ · SUPER JUMP</span>
+              {snapshot.shoeFormAttack && <span className={snapshot.formAttackReady ? "upgrade-unlocked form-attack-chip" : "form-attack-chip"}>F · {snapshot.shoeFormAttack}</span>}
               <span className={snapshot.laceLash ? "upgrade-unlocked" : ""}>Q · LACE LASH</span>
               <span className={snapshot.gumStomp ? "upgrade-unlocked" : ""}>E · GUM STOMP</span>
+              <span className={snapshot.ultraMove ? "upgrade-unlocked ultra-chip" : "ultra-chip"}>U · ULTRA MOVE</span>
             </div>
             <div className="powerup-stitches" aria-hidden="true"><i /><i /><i /></div>
           </div>
@@ -215,6 +239,11 @@ export default function GameCanvas() {
             )}
 
             {snapshot.mode === "title" && (
+              <div className="story-rescue-stitchline" aria-label="Rescue mission reminder">
+                <span>MISSION PATCH</span><b>EVERY LEAP GETS YOU CLOSER TO YOUR LEFT.</b>
+              </div>
+            )}
+            {snapshot.mode === "title" && (
               <div className="story-hero-strip" aria-label="Right Shoe begins the rescue route toward Left Shoe">
                 <div className="story-shoe-card story-shoe-card-right">
                   <img className="realistic-shoe-mark story-righty form-coralChrome" src={heroArt} alt="Bright coral Right Shoe" />
@@ -232,6 +261,7 @@ export default function GameCanvas() {
                 <div className="dance-spark dance-spark-one" /><div className="dance-spark dance-spark-two" /><div className="dance-spark dance-spark-three" />
                 <img src={gameAssets.reunionDance} alt="Right Shoe and Left Shoe dancing together" />
                 <b>THE PAIR DANCE</b>
+                <small>{snapshot.reunionSeconds > 0 ? `DANCE FINALE · ${snapshot.reunionSeconds}s` : "DANCE FINALE · ENCORE"}</small>
               </div>
             )}
 
@@ -265,6 +295,8 @@ export default function GameCanvas() {
                 <span><kbd>SHIFT</kbd> LACE DASH</span>
                 <span><kbd>Q</kbd> LACE LASH</span>
                 <span><kbd>E</kbd> GUM STOMP</span>
+                <span><kbd>F</kbd> FORM ATTACK</span>
+                <span><kbd>U</kbd> ULTRA MOVE</span>
               </div>
             )}
           </div>
@@ -290,8 +322,10 @@ export default function GameCanvas() {
             >→</button>
           </div>
           <div className="touch-cluster touch-action">
+            {snapshot.shoeFormAttack && <button type="button" className="form-touch" onPointerDown={() => dispatchCommand("formAttack")}>{snapshot.shoeFormAttack.split(" ")[0]}</button>}
             {snapshot.laceLash && <button type="button" className="lash-touch" onPointerDown={() => dispatchCommand("lash")}>LASH</button>}
             {snapshot.gumStomp && <button type="button" className="stomp-touch" onPointerDown={() => dispatchCommand("stomp")}>STOMP</button>}
+            {snapshot.ultraMove && <button type="button" className="ultra-touch" onPointerDown={() => dispatchCommand("ultra")}>ULTRA</button>}
             <button type="button" className="dash-touch" onPointerDown={() => dispatchCommand("dash")}>DASH</button>
             <button type="button" className="jump-touch" onPointerDown={() => dispatchCommand("jump")}>JUMP</button>
           </div>

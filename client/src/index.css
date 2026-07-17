@@ -145,6 +145,28 @@ button:focus-visible {
   filter: brightness(1.2) hue-rotate(9deg) saturate(1.3) drop-shadow(0 0 16px rgba(101, 221, 240, 0.82)) drop-shadow(0 13px 15px rgba(0, 0, 0, 0.4));
 }
 
+/* Transformation silhouettes: deliberate proportional shifts make each shoe type legible before its signature attack lands. */
+.form-pump {
+  filter: brightness(1.2) saturate(1.46) hue-rotate(-8deg) drop-shadow(0 0 16px rgba(255, 113, 85, 0.84)) drop-shadow(0 13px 15px rgba(0, 0, 0, 0.4));
+  transform: rotate(-12deg) scaleX(0.92) scaleY(1.12);
+}
+.form-hightop {
+  filter: brightness(1.24) hue-rotate(12deg) saturate(1.34) drop-shadow(0 0 16px rgba(101, 221, 240, 0.84)) drop-shadow(0 13px 15px rgba(0, 0, 0, 0.4));
+  transform: rotate(-8deg) scaleX(0.98) scaleY(1.22);
+}
+.form-loafer {
+  filter: brightness(1.08) sepia(0.18) saturate(1.32) drop-shadow(0 0 16px rgba(135, 188, 119, 0.78)) drop-shadow(0 13px 15px rgba(0, 0, 0, 0.4));
+  transform: rotate(-6deg) scaleX(1.18) scaleY(0.87);
+}
+.form-cowboy {
+  filter: brightness(1.16) sepia(0.68) saturate(1.58) drop-shadow(0 0 16px rgba(255, 189, 78, 0.84)) drop-shadow(0 13px 15px rgba(0, 0, 0, 0.4));
+  transform: rotate(-15deg) scaleX(1.04) scaleY(1.2);
+}
+.form-sneaker {
+  filter: brightness(1.18) hue-rotate(56deg) saturate(1.52) drop-shadow(0 0 18px rgba(194, 115, 255, 0.88)) drop-shadow(0 13px 15px rgba(0, 0, 0, 0.4));
+  transform: rotate(-4deg) scaleX(1.2) scaleY(0.96);
+}
+
 .stage-hero-wrap em,
 .stage-rescue-beacon em {
   color: #ffd988;
@@ -441,6 +463,26 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+/* Stitched combat telemetry: a tense violet boss seal flips to a calm cyan tower-open state. */
+.boss-readout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.44rem;
+  padding: 0.33rem 0.38rem;
+  border: 1px solid rgba(208, 130, 255, 0.48);
+  background: linear-gradient(90deg, rgba(75, 34, 114, 0.62), rgba(15, 31, 64, 0.35));
+  color: #f1d6ff;
+  font-size: 0.4rem;
+  letter-spacing: 0.095em;
+}
+
+.boss-readout span { color: #caa5ff; font-weight: 700; }
+.boss-readout b { color: #fff0c9; font-size: 0.43rem; font-weight: 500; text-shadow: 0 0 9px rgba(222, 143, 255, 0.58); }
+.boss-readout.boss-cleared { border-color: rgba(101, 221, 240, 0.64); background: linear-gradient(90deg, rgba(23, 111, 128, 0.64), rgba(15, 47, 69, 0.34)); }
+.boss-readout.boss-cleared span, .boss-readout.boss-cleared b { color: #dffeff; }
+
  .hud-powerups {
   top: 4.15rem;
   right: 1rem;
@@ -496,6 +538,18 @@ button:focus-visible {
   color: #dffeff;
   text-shadow: 0 0 9px rgba(101, 221, 240, 0.42);
 }
+
+/* The Lost Pair: Super Jump is the cyan lift-off signature in the stitched ability patch. */
+.upgrade-readout .super-jump-chip {
+  color: #90fbff;
+  text-shadow: 0 0 12px rgba(101, 221, 240, 0.82);
+}
+
+/* Form attacks stay stitch-colored; Ultra keeps the final-prism violet reserved for the boss finish. */
+.upgrade-readout .form-attack-chip { color: rgba(255, 193, 148, 0.56); }
+.upgrade-readout .form-attack-chip.upgrade-unlocked { color: #ffd5ad; text-shadow: 0 0 12px rgba(255, 125, 83, 0.72); }
+.upgrade-readout .ultra-chip { color: rgba(212, 181, 255, 0.42); }
+.upgrade-readout .ultra-chip.upgrade-unlocked { color: #ecd7ff; text-shadow: 0 0 13px rgba(194, 115, 255, 0.92); }
 
  .powerup-stitches {
   position: absolute;
@@ -721,6 +775,23 @@ button:focus-visible {
   font-size: clamp(0.74rem, 1.13vw, 0.92rem);
   line-height: 1.68;
 }
+
+/* Opening rescue cue: mono thread label plus warm storybook promise. */
+.story-rescue-stitchline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  padding: 0.34rem 0.48rem;
+  border: 1px dashed rgba(255, 207, 99, 0.72);
+  background: rgba(14, 28, 58, 0.66);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #fff4d7;
+  font-size: 0.43rem;
+  letter-spacing: 0.1em;
+}
+.story-rescue-stitchline span { color: #ffb779; font-weight: 700; }
+.story-rescue-stitchline b { color: #dffeff; font-weight: 500; text-shadow: 0 0 9px rgba(101, 221, 240, 0.38); }
 
  .story-hero-strip {
   display: flex;
@@ -1008,7 +1079,9 @@ kbd {
  .touch-cluster .dash-touch,
  .touch-cluster .jump-touch,
  .touch-cluster .lash-touch,
- .touch-cluster .stomp-touch {
+ .touch-cluster .stomp-touch,
+ .touch-cluster .form-touch,
+ .touch-cluster .ultra-touch {
   width: 3.7rem;
   height: 3.7rem;
   border-radius: 50%;
@@ -1021,6 +1094,8 @@ kbd {
  .touch-cluster .jump-touch { border-color: rgba(255, 160, 121, 0.62); background: rgba(233, 76, 67, 0.69); }
  .touch-cluster .lash-touch { border-color: rgba(255, 232, 180, 0.7); color: #fff4d8; background: rgba(160, 58, 58, 0.74); }
  .touch-cluster .stomp-touch { border-color: rgba(164, 244, 141, 0.7); color: #eaffd4; background: rgba(47, 111, 80, 0.78); }
+ .touch-cluster .form-touch { border-color: rgba(255, 159, 111, 0.82); color: #fff0d2; background: rgba(179, 62, 47, 0.8); }
+ .touch-cluster .ultra-touch { border-color: rgba(218, 164, 255, 0.9); color: #f7e8ff; background: rgba(100, 49, 151, 0.86); box-shadow: 0 0 16px rgba(179, 95, 255, 0.44); }
 .touch-cluster button:active { transform: scale(0.94); }
 
 @media (max-width: 860px) {
@@ -1058,6 +1133,7 @@ kbd {
   .story-logo { width: 3.2rem; margin-bottom: 0.85rem; }
   .story-copy h1 { font-size: clamp(2.8rem, 15vw, 4.7rem); }
   .story-intro { font-size: 0.7rem; line-height: 1.56; }
+  .story-rescue-stitchline { margin-top: 0.5rem; font-size: 0.36rem; gap: 0.34rem; padding: 0.25rem 0.34rem; }
   .story-hero-strip { height: 4.6rem; margin-top: 0.7rem; }
   .story-righty { width: 5rem; }
   .story-lefty { width: 4.4rem; }
@@ -1108,11 +1184,22 @@ kbd {
   position: absolute;
   z-index: 2;
   right: 0.72rem;
-  bottom: 0.64rem;
+  bottom: 0.96rem;
   color: #fff4d7;
   font-size: 0.53rem;
   font-weight: 500;
   letter-spacing: 0.18em;
+  text-shadow: 0 2px 9px #050d22;
+}
+
+.reunion-dance small {
+  position: absolute;
+  z-index: 2;
+  right: 0.72rem;
+  bottom: 0.42rem;
+  color: #a8f6ff;
+  font-size: 0.36rem;
+  letter-spacing: 0.14em;
   text-shadow: 0 2px 9px #050d22;
 }
 

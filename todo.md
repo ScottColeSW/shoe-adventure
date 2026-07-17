@@ -36,3 +36,13 @@
 - [x] Implement interactive triggers that unlock routes, move hazards, or create power-up opportunities.
 - [x] Update mission language and spectator callouts to describe the contraption actions clearly.
 - [x] Validate the revised desktop and mobile game states for clarity, playability, and visual cohesion.
+
+## Super Run Power Showcase
+
+- [x] Define the camera-readable Super Run sequence: double jump, Super Jump pickup, bonus capture, weapon upgrade, mini-bosses, Ultra Move, Boss, rescue, and finale.
+- [x] Remove hero translucency and strengthen the hero silhouette, glow, and contrast across gameplay states.
+- [x] Add a Super Jump power-up and bonus-capture beat that visibly rewards the double-jump demonstration.
+- [x] Add staged weapon upgrades and mini-boss encounters to the Super Run route.
+- [ ] Add an Ultra Move and a Boss encounter that resolves before the rescue.
+- [ ] Extend the reunion win scene into a 5–7 second dancing celebration with readable replay timing.
+- [ ] Validate the full showcase sequence at desktop and mobile sizes without visual ambiguity.
