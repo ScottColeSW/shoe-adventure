@@ -7,6 +7,10 @@ export const gameAssets = {
   rightShoeHero: "/manus-storage/right-shoe-hero_366b91a3.png",
   powerupTray: "/manus-storage/shoe-adventure-powerups_622ad4f9.png",
   logo: "/manus-storage/shoe-adventure-logo_cc0bdbb2.png",
+  rightShoeRealistic: "/manus-storage/right-shoe-realistic_a31b4b73.png",
+  // A mirrored matching pair preserves the rescue read while the reserved Left Shoe render is unavailable.
+  leftShoeRealistic: "/manus-storage/right-shoe-realistic_a31b4b73.png",
+  rollerSkateRealistic: "/manus-storage/roller-skate-realistic_8767122a.png",
 } as const;
 
 export type GameAssetKey = keyof typeof gameAssets;

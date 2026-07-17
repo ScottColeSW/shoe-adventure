@@ -15,6 +15,8 @@ const initialSnapshot: UiSnapshot = {
   message: "Lace up. The rescue starts now.",
   checkpoint: "Bedroom Threshold",
   rescued: false,
+  superRun: false,
+  superRunAction: "AI standing by.",
 };
 
 type Command =
@@ -26,7 +28,8 @@ type Command =
   | "holdLeft"
   | "holdRight"
   | "releaseLeft"
-  | "releaseRight";
+  | "releaseRight"
+  | "superRun";
 
 function dispatchCommand(command: Command) {
   window.dispatchEvent(new CustomEvent<Command>("shoe-adventure:command", { detail: command }));
@@ -109,12 +112,12 @@ export default function GameCanvas() {
         <div className="stage-storyline" aria-hidden="true">
           <div className="stage-box stage-box-left"><span>SHOEBOX CLIFF</span></div>
           <div className="stage-hero-wrap">
-            <span className="righty-token"><i /><b /><b /><b /></span>
+            <img className="realistic-shoe-mark stage-righty" src={gameAssets.rightShoeRealistic} alt="" />
             <em>RIGHTY</em>
           </div>
           <div className="stage-lace-route"><i /><i /><i /><i /><i /><i /></div>
           <div className="stage-rescue-beacon">
-            <span className="lefty-token"><i /><b /></span>
+            <img className="realistic-shoe-mark stage-lefty" src={gameAssets.leftShoeRealistic} alt="" />
             <em>LEFTY</em>
             <small>RESCUE BEACON</small>
           </div>
@@ -122,6 +125,13 @@ export default function GameCanvas() {
         </div>
       )}
       <div className="graphics-badge" aria-label="Browser graphics mode">WEBGPU READY · WEBGL FALLBACK</div>
+      {snapshot.superRun && snapshot.mode !== "title" && (
+        <aside className="super-run-ribbon" aria-live="polite">
+          <span>AI SUPER RUN</span>
+          <b>{snapshot.superRunAction}</b>
+          <i aria-hidden="true" /><i aria-hidden="true" /><i aria-hidden="true" />
+        </aside>
+      )}
 
       {snapshot.mode !== "title" && (
         <section className="game-hud" aria-live="polite">
@@ -174,9 +184,9 @@ export default function GameCanvas() {
 
             {snapshot.mode === "title" && (
               <div className="story-hero-strip" aria-hidden="true">
-                <span className="righty-token"><i /><b /><b /><b /></span>
+                <img className="realistic-shoe-mark story-righty" src={gameAssets.rightShoeRealistic} alt="" />
                 <span className="story-rule" />
-                <span className="lefty-token"><i /><b /></span>
+                <img className="realistic-shoe-mark story-lefty" src={gameAssets.leftShoeRealistic} alt="" />
               </div>
             )}
 
@@ -186,7 +196,13 @@ export default function GameCanvas() {
               ) : (
                 <button className="primary-action" type="button" onClick={() => dispatchCommand("restart")}>STITCH THE ROUTE AGAIN <span>↗</span></button>
               )}
-              {snapshot.mode !== "title" && (
+              {snapshot.mode === "title" && (
+                <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>WATCH SUPER RUN <span>✦</span></button>
+              )}
+              {snapshot.mode === "won" && snapshot.superRun && (
+                <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>REPLAY SUPER RUN <span>✦</span></button>
+              )}
+              {snapshot.mode !== "title" && snapshot.mode !== "won" && (
                 <button className="secondary-action" type="button" onClick={() => dispatchCommand("restart")}>RESTART FROM CHECKPOINT</button>
               )}
             </div>
@@ -202,7 +218,7 @@ export default function GameCanvas() {
         </section>
       )}
 
-      {snapshot.mode === "playing" && (
+      {snapshot.mode === "playing" && !snapshot.superRun && (
         <section className="touch-controls" aria-label="Touch controls">
           <div className="touch-cluster touch-directional">
             <button

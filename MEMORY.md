@@ -29,3 +29,7 @@ At 375×812, the title composition remains legible and maintains the rescue-stor
 ## Final Review Note
 
 The trusted full-page visual review produced blank captures because the game scene and HUD are intentionally fixed-position layers and the capture process suppresses non-top fixed chrome. Earlier standard viewport captures remain the valid visual evidence. The review’s useful refinement points are nevertheless accepted: make the left-to-right rescue stage, coral Right Shoe, Left Shoe objective, stitched patch HUD, and footwear-specific voice more explicit in the active play view.
+
+## Realistic Footwear Asset Fallback
+
+The generated `right-shoe-realistic` asset at `/manus-storage/right-shoe-realistic_a31b4b73.png` renders successfully in the game as the realistic hero. The reserved Left Shoe asset at `/manus-storage/left-shoe-realistic_35dfc931.png` did not resolve into usable art during visual validation, so the game now mirrors the successful Right Shoe asset for Left Shoe via CSS. The roller-skate asset remains registered at `/manus-storage/roller-skate-realistic_8767122a.png`; retain procedural meshes as subtle fallback geometry beneath its billboard.

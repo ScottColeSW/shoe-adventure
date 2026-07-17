@@ -29,7 +29,8 @@ type GameCommand =
   | "holdLeft"
   | "holdRight"
   | "releaseLeft"
-  | "releaseRight";
+  | "releaseRight"
+  | "superRun";
 
 interface Platform {
   x: number;
@@ -106,6 +107,8 @@ export interface UiSnapshot {
   message: string;
   checkpoint: string;
   rescued: boolean;
+  superRun: boolean;
+  superRunAction: string;
 }
 
 const WORLD_END = 66;
@@ -134,12 +137,16 @@ export class GameWorld {
   private readonly parallax: Mesh[] = [];
   private readonly held = { left: false, right: false };
   private readonly isDemo: boolean;
+  private readonly isSuperRunPreview: boolean;
   private player: PlayerState;
   private mode: GameMode = "title";
   private buttons = 0;
   private message = "Lace up. The rescue starts now.";
   private activeCheckpoint = "Bedroom Threshold";
   private demoJumpTimer = 0;
+  private superRun = false;
+  private superRunAction = "AI standing by.";
+  private superRunKickTimer = 0;
   private lastUiSignature = "";
   private titleTime = 0;
   private leftShoe: TransformNode | null = null;
@@ -154,11 +161,14 @@ export class GameWorld {
     this.camera = camera;
     this.glow = glow;
     this.quality = window.innerWidth < 760 ? "gentle" : "cinematic";
-    this.isDemo = new URLSearchParams(window.location.search).has("demo");
+    const query = new URLSearchParams(window.location.search);
+    this.isDemo = query.has("demo");
+    this.isSuperRunPreview = query.has("superrun");
     this.player = this.createPlayer();
     this.createWorld();
     this.bindInput();
-    this.publishUi(true);
+    if (this.isSuperRunPreview) this.startSuperRun();
+    else this.publishUi(true);
 
     this.scene.onBeforeRenderObservable.add(() => {
       const delta = Math.min(this.scene.getEngine().getDeltaTime() / 1000, 0.05);
@@ -294,6 +304,34 @@ export class GameWorld {
     return platform;
   }
 
+  private addFootwearBillboard(
+    name: string,
+    assetUrl: string,
+    root: TransformNode,
+    width: number,
+    height: number,
+    position: Vector3,
+    glowColor: Color3,
+  ): Mesh {
+    const plane = MeshBuilder.CreatePlane(name, { width, height }, this.scene);
+    plane.parent = root;
+    plane.position = position;
+    plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable = false;
+
+    const material = new StandardMaterial(`${name}Mat`, this.scene);
+    const texture = new Texture(assetUrl, this.scene);
+    texture.hasAlpha = true;
+    material.diffuseTexture = texture;
+    material.opacityTexture = texture;
+    material.useAlphaFromDiffuseTexture = true;
+    material.emissiveColor = glowColor.scale(0.14);
+    material.specularColor = Color3.Black();
+    material.backFaceCulling = false;
+    plane.material = material;
+    return plane;
+  }
+
   private createPlayer(): PlayerState {
     const root = new TransformNode("rightShoeRoot", this.scene);
     const sole = MeshBuilder.CreateBox("rightSole", { width: 1.55, height: 0.24, depth: 0.72 }, this.scene);
@@ -335,6 +373,16 @@ export class GameWorld {
     knot.position = new Vector3(-0.36, 0.94, -0.45);
     knot.material = this.createMaterial("rightHeartEyeletMat", GOLD, new Color3(0.56, 0.22, 0.03));
 
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
+    this.addFootwearBillboard(
+      "rightShoeRealisticSprite",
+      gameAssets.rightShoeRealistic,
+      root,
+      2.42,
+      1.86,
+      new Vector3(0.06, 0.9, -0.64),
+      RESCUE_CORAL,
+    );
     root.position = new Vector3(0, -4.2, -0.4);
     return {
       root,
@@ -423,6 +471,16 @@ export class GameWorld {
     hostileEye.parent = root;
     hostileEye.position = new Vector3(0.22, 0.72, -0.4);
     hostileEye.material = this.createMaterial(`skateEyeMat-${x}`, VIOLET, RESCUE_CORAL);
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
+    this.addFootwearBillboard(
+      `rogueSkateRealisticSprite-${x}`,
+      gameAssets.rollerSkateRealistic,
+      root,
+      1.9,
+      1.58,
+      new Vector3(0, 0.82, -0.58),
+      new Color3(0.16, 0.42, 0.88),
+    );
     root.position = new Vector3(x, bottom, -0.25);
     return { kind: "skate", root, x, bottom, minX, maxX, speed: 1.08, width: 1.12, height: 1.08, alive: true, phase: x };
   }
@@ -536,6 +594,16 @@ export class GameWorld {
     heart.parent = root;
     heart.position = new Vector3(-0.12, 0.72, -0.43);
     heart.material = this.createMaterial("leftHeartMat", RESCUE_CORAL, GOLD);
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
+    this.addFootwearBillboard(
+      "leftShoeRealisticSprite",
+      gameAssets.leftShoeRealistic,
+      root,
+      2.22,
+      1.7,
+      new Vector3(-0.03, 0.87, -0.62),
+      RESCUE_CORAL,
+    );
     return root;
   }
 
@@ -564,6 +632,7 @@ export class GameWorld {
     if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "shift", "r", "escape"].includes(key)) {
       event.preventDefault();
     }
+    if (this.superRun && key !== "escape") return;
     if (key === "arrowleft" || key === "a") this.held.left = true;
     if (key === "arrowright" || key === "d") this.held.right = true;
     if (key === "arrowup" || key === "w" || key === " ") this.tryJump();
@@ -588,12 +657,16 @@ export class GameWorld {
     if (command === "dash") this.tryDash();
     if (command === "holdLeft") this.held.left = true;
     if (command === "holdRight") this.held.right = true;
+    if (command === "superRun") this.startSuperRun();
+    if (this.superRun && !["pause", "restart"].includes(command)) return;
     if (command === "releaseLeft") this.held.left = false;
     if (command === "releaseRight") this.held.right = false;
   }
 
   private start() {
     if (this.mode === "title" || this.mode === "paused") {
+      this.superRun = false;
+      this.superRunAction = "AI standing by.";
       this.mode = "playing";
       this.message = this.mode === "playing" ? "Every leap gets you closer to your left." : this.message;
       this.publishUi(true);
@@ -613,6 +686,8 @@ export class GameWorld {
   }
 
   private restart() {
+    this.superRun = false;
+    this.superRunAction = "AI standing by.";
     this.mode = "playing";
     const checkpointX = this.activeCheckpoint === "Bedroom Threshold" ? 0 : this.activeCheckpoint === "Lace Bridge" ? 32.4 : 49.7;
     this.player.x = checkpointX;
@@ -623,6 +698,39 @@ export class GameWorld {
     this.player.invulnerable = 1.5;
     this.player.root.setEnabled(true);
     this.message = "Right Shoe is back on the trail.";
+    this.publishUi(true);
+  }
+
+  private startSuperRun() {
+    this.mode = "playing";
+    this.superRun = true;
+    this.superRunAction = "AI ROUTE LOCKED — scanning the button trail.";
+    this.activeCheckpoint = "Bedroom Threshold";
+    this.buttons = 0;
+    this.player.x = 0;
+    this.player.bottom = -4.2;
+    this.player.vx = 0;
+    this.player.vy = 0;
+    this.player.hearts = 3;
+    this.player.doubleJumps = 0;
+    this.player.dashCharges = 0;
+    this.player.moonTimer = 0;
+    this.player.invulnerable = 2;
+    this.player.jumpUsed = false;
+    this.player.root.setEnabled(true);
+    this.held.left = false;
+    this.held.right = true;
+    this.pickups.forEach((pickup) => {
+      pickup.collected = false;
+      pickup.root.setEnabled(true);
+    });
+    this.enemies.forEach((enemy) => {
+      enemy.alive = true;
+      enemy.x = enemy.minX + 0.35;
+      enemy.root.setEnabled(true);
+    });
+    this.checkpoints.forEach((checkpoint) => { checkpoint.activated = false; });
+    if (this.leftShoeHalo) this.leftShoeHalo.scaling = Vector3.One();
     this.publishUi(true);
   }
 
@@ -671,6 +779,7 @@ export class GameWorld {
     if (this.mode !== "playing") return;
 
     if (this.isDemo) this.updateDemo(delta);
+    if (this.superRun) this.updateSuperRun(delta);
     this.updatePlayer(delta);
     this.updateEnemies(delta);
     this.updatePickups(delta);
@@ -695,6 +804,56 @@ export class GameWorld {
       this.demoJumpTimer = 1.25;
     }
     if (this.player.dashCharges > 0 && this.player.x > 21 && this.player.dashCooldown <= 0) this.tryDash();
+  }
+
+  private updateSuperRun(delta: number) {
+    this.superRunKickTimer = Math.max(0, this.superRunKickTimer - delta);
+    this.held.left = false;
+    this.held.right = this.player.x < 63.2;
+
+    if (this.player.x >= 6.6) this.claimSuperRunPowerup("feather", "WINGTIP FLIGHT — double-jump unlocked.");
+    if (this.player.x >= 18.8) this.claimSuperRunPowerup("dash", "LACE DASH — coral boost charged.");
+    if (this.player.x >= 33.1) this.claimSuperRunPowerup("heart", "HEART SOLE — route integrity restored.");
+    if (this.player.x >= 45.8) this.claimSuperRunPowerup("moon", "MOON INSOLE — enemies slowed for the finale.");
+
+    const platformAhead = this.platforms.some(
+      (platform) =>
+        platform.x - platform.width / 2 > this.player.x &&
+        platform.x - platform.width / 2 - this.player.x < 2.35 &&
+        platform.top > this.player.bottom + 0.18,
+    );
+    const showcaseBeat = [7.4, 15.1, 21.1, 28.0, 35.1, 42.0, 51.1, 58.0].some((beat) => Math.abs(this.player.x - beat) < 0.16);
+    if (this.player.grounded && (platformAhead || showcaseBeat)) this.tryJump();
+    if (this.player.x > 19.4 && this.player.x < 25.6 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) {
+      this.superRunAction = "LACE DASH — cutting through the laundry lane.";
+      this.tryDash();
+    }
+
+    const target = this.enemies.find(
+      (enemy) => enemy.alive && enemy.x - this.player.x < 1.38 && enemy.x >= this.player.x - 0.8,
+    );
+    if (target) this.performSuperKick(target);
+    if (this.player.x > 60.1 && this.mode === "playing") this.superRunAction = "RESCUE PROTOCOL — crossing into Lefty’s tower.";
+  }
+
+  private claimSuperRunPowerup(kind: PickupKind, callout: string) {
+    const pickup = this.pickups.find((candidate) => candidate.kind === kind && !candidate.collected);
+    if (!pickup) return;
+    this.collectPickup(pickup);
+    this.superRunAction = callout;
+    this.message = `AI SUPER RUN: ${callout}`;
+  }
+
+  private performSuperKick(enemy: Enemy) {
+    if (!enemy.alive) return;
+    const move = enemy.kind === "skate" ? "TURBO HEEL KICK" : enemy.kind === "slime" ? "CRESCENT SOLE KICK" : "SOLE-FLIP KICK";
+    if (enemy.kind === "skate" && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
+    this.superRunKickTimer = 0.52;
+    this.defeatEnemy(enemy);
+    this.player.vy = Math.max(this.player.vy, 7.4);
+    this.superRunAction = `${move} — ${enemy.kind === "skate" ? "rogue skate grounded." : "shoe fiend cleared."}`;
+    this.message = `AI SUPER RUN: ${this.superRunAction}`;
+    this.spawnSparks(enemy.x, enemy.bottom + 0.78, RESCUE_CORAL, 12, 3.8);
   }
 
   private updatePlayer(delta: number) {
@@ -737,6 +896,7 @@ export class GameWorld {
     this.player.root.position.y = this.player.bottom + bob;
     this.player.root.scaling.x = this.player.facing;
     this.player.root.rotation.z = Math.max(-0.18, Math.min(0.18, -this.player.vx * 0.016));
+    if (this.superRunKickTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.62;
     if (this.player.dashTimer > 0) {
       this.spawnSparks(this.player.x - this.player.facing * 0.5, this.player.bottom + 0.65, RESCUE_CORAL, 1, 1.4);
     }
@@ -840,6 +1000,14 @@ export class GameWorld {
 
   private damagePlayer(reason: string) {
     if (this.player.invulnerable > 0 || this.mode !== "playing") return;
+    if (this.superRun) {
+      this.player.invulnerable = 0.85;
+      this.superRunAction = "AI RECOVERY — lace barrier absorbed the hit.";
+      this.message = `AI SUPER RUN: ${this.superRunAction}`;
+      this.spawnSparks(this.player.x, this.player.bottom + 0.65, CYAN, 9, 2.3);
+      this.publishUi(true);
+      return;
+    }
     this.player.hearts -= 1;
     this.player.invulnerable = 1.35;
     this.player.vx = -this.player.facing * 7.8;
@@ -887,7 +1055,8 @@ export class GameWorld {
   private checkRescue() {
     if (this.player.x < 60.7 || this.mode !== "playing") return;
     this.mode = "won";
-    this.message = "Reunited! Right Shoe found the Left Shoe.";
+    this.superRunAction = this.superRun ? "PAIR RESTORED — BIG WIN!" : this.superRunAction;
+    this.message = this.superRun ? "PAIR RESTORED! The AI Super Run found Left Shoe." : "Reunited! Right Shoe found the Left Shoe.";
     this.held.left = false;
     this.held.right = false;
     if (this.leftShoeHalo) this.leftShoeHalo.scaling = new Vector3(1.52, 1.52, 1.52);
@@ -933,6 +1102,8 @@ export class GameWorld {
       message: this.message,
       checkpoint: this.activeCheckpoint,
       rescued: this.mode === "won",
+      superRun: this.superRun,
+      superRunAction: this.superRunAction,
     };
     const signature = JSON.stringify(snapshot);
     if (!force && signature === this.lastUiSignature) return;
