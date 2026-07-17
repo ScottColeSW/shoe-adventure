@@ -21,6 +21,7 @@ export type GameMode = "title" | "playing" | "paused" | "won" | "lost";
 type PickupKind = "button" | "feather" | "dash" | "heart" | "moon" | "chrome" | "moonstep" | "lash" | "gum";
 type ShoeForm = "starter" | "coralChrome" | "moonstep";
 type EnemyKind = "lace" | "slime" | "skate";
+type ContraptionKind = "buttonRun" | "laceLever" | "gumPress" | "spoolLift";
 type GameCommand =
   | "start"
   | "restart"
@@ -101,6 +102,15 @@ interface Checkpoint {
   root: TransformNode;
 }
 
+interface Contraption {
+  kind: ContraptionKind;
+  root: TransformNode;
+  x: number;
+  activated: boolean;
+  progress: number;
+  parts: Mesh[];
+}
+
 interface Spark {
   mesh: Mesh;
   velocity: Vector3;
@@ -123,6 +133,8 @@ export interface UiSnapshot {
   shoeForm: ShoeForm;
   laceLash: boolean;
   gumStomp: boolean;
+  contraptionsActivated: number;
+  contraptionStatus: string;
 }
 
 const WORLD_END = 66;
@@ -147,6 +159,7 @@ export class GameWorld {
   private readonly enemies: Enemy[] = [];
   private readonly pickups: Pickup[] = [];
   private readonly checkpoints: Checkpoint[] = [];
+  private readonly contraptions: Contraption[] = [];
   private readonly sparks: Spark[] = [];
   private readonly parallax: Mesh[] = [];
   private readonly held = { left: false, right: false };
@@ -209,6 +222,7 @@ export class GameWorld {
     this.configureLights();
     this.createBackdrop();
     this.createLevelGeometry();
+    this.createContraptions();
     this.createEnemies();
     this.createPickups();
     this.createCheckpoints();
@@ -304,6 +318,118 @@ export class GameWorld {
     tape.isPickable = false;
 
     return this.addPlatform(x, y, width, height, mesh);
+  }
+
+  private createContraptions() {
+    this.createButtonBallRun(11.2, -3.95);
+    this.createLaceLever(42.4, 0.25);
+    this.createGumPress(55.2, 2.15);
+    this.createSpoolLift(59.4, 3.15);
+  }
+
+  private createButtonBallRun(x: number, y: number) {
+    const root = new TransformNode("buttonBallRun", this.scene);
+    root.position = new Vector3(x, y, -0.3);
+    const track = MeshBuilder.CreateBox("buttonBallTrack", { width: 3.15, height: 0.18, depth: 0.42 }, this.scene);
+    track.parent = root;
+    track.position = new Vector3(0, 0.48, 0);
+    track.rotation.z = -0.13;
+    track.material = this.createMaterial("buttonBallTrackMat", new Color3(0.58, 0.31, 0.13), new Color3(0.12, 0.045, 0.01));
+    const ball = MeshBuilder.CreateSphere("coralButtonBall", { diameter: 0.44, segments: 18 }, this.scene);
+    ball.parent = root;
+    ball.position = new Vector3(-1.18, 0.72, -0.16);
+    ball.material = this.createMaterial("coralButtonBallMat", RESCUE_CORAL, GOLD);
+    const bell = MeshBuilder.CreateTorus("buttonRunBell", { diameter: 0.54, thickness: 0.12, tessellation: 18 }, this.scene);
+    bell.parent = root;
+    bell.position = new Vector3(1.2, 0.72, -0.08);
+    bell.material = this.createMaterial("buttonRunBellMat", GOLD, new Color3(0.52, 0.2, 0.01));
+    const railParts = [track, ball, bell];
+    [-1.35, 1.35].forEach((offset, index) => {
+      const post = MeshBuilder.CreateCylinder(`buttonRunPost-${index}`, { height: 0.72, diameter: 0.12, tessellation: 12 }, this.scene);
+      post.parent = root;
+      post.position = new Vector3(offset, 0.36, 0.1);
+      post.material = this.createMaterial(`buttonRunPostMat-${index}`, CREAM, new Color3(0.2, 0.08, 0.02));
+      railParts.push(post);
+    });
+    this.contraptions.push({ kind: "buttonRun", root, x, activated: false, progress: 0, parts: railParts });
+  }
+
+  private createLaceLever(x: number, y: number) {
+    const root = new TransformNode("laceLeverContraption", this.scene);
+    root.position = new Vector3(x, y, -0.28);
+    const base = MeshBuilder.CreateBox("laceLeverBase", { width: 1.25, height: 0.32, depth: 0.68 }, this.scene);
+    base.parent = root;
+    base.position = new Vector3(0, 0.16, 0);
+    base.material = this.createMaterial("laceLeverBaseMat", new Color3(0.56, 0.29, 0.12), new Color3(0.1, 0.035, 0.01));
+    const arm = MeshBuilder.CreateBox("laceLeverArm", { width: 1.8, height: 0.15, depth: 0.15 }, this.scene);
+    arm.parent = root;
+    arm.position = new Vector3(0.12, 0.88, -0.06);
+    arm.rotation.z = 0.24;
+    arm.material = this.createMaterial("laceLeverArmMat", RESCUE_CORAL, new Color3(0.48, 0.03, 0.02));
+    const handle = MeshBuilder.CreateTorus("laceLeverHandle", { diameter: 0.38, thickness: 0.075, tessellation: 18 }, this.scene);
+    handle.parent = root;
+    handle.position = new Vector3(0.93, 1.08, -0.12);
+    handle.material = this.createMaterial("laceLeverHandleMat", CREAM, GOLD);
+    const parts = [base, arm, handle];
+    for (let index = 0; index < 6; index += 1) {
+      const domino = MeshBuilder.CreateBox(`laceLeverDomino-${index}`, { width: 0.18, height: 0.72, depth: 0.12 }, this.scene);
+      domino.parent = root;
+      domino.position = new Vector3(1.55 + index * 0.31, 0.38, -0.06);
+      domino.material = this.createMaterial(`laceLeverDominoMat-${index}`, index % 2 === 0 ? CREAM : RESCUE_CORAL, new Color3(0.15, 0.04, 0.02));
+      parts.push(domino);
+    }
+    this.contraptions.push({ kind: "laceLever", root, x, activated: false, progress: 0, parts });
+  }
+
+  private createGumPress(x: number, y: number) {
+    const root = new TransformNode("gumPressContraption", this.scene);
+    root.position = new Vector3(x, y, -0.28);
+    const plate = MeshBuilder.CreateBox("gumPressPlate", { width: 2.05, height: 0.2, depth: 0.9 }, this.scene);
+    plate.parent = root;
+    plate.position = new Vector3(0, 0.24, 0);
+    plate.material = this.createMaterial("gumPressPlateMat", new Color3(0.51, 0.3, 0.16), new Color3(0.08, 0.03, 0.01));
+    const gum = MeshBuilder.CreateDisc("gumPressPad", { radius: 0.48, tessellation: 24 }, this.scene);
+    gum.parent = root;
+    gum.position = new Vector3(0, 0.39, -0.49);
+    gum.material = this.createMaterial("gumPressPadMat", MOSS, new Color3(0.55, 0.11, 0.26));
+    const ramp = MeshBuilder.CreateBox("gumPressRamp", { width: 1.75, height: 0.22, depth: 0.5 }, this.scene);
+    ramp.parent = root;
+    ramp.position = new Vector3(1.8, 0.82, 0.02);
+    ramp.rotation.z = 0.34;
+    ramp.material = this.createMaterial("gumPressRampMat", new Color3(0.62, 0.36, 0.17), new Color3(0.12, 0.04, 0.01));
+    const parts = [plate, gum, ramp];
+    [-0.65, 0.65].forEach((offset, index) => {
+      const spring = MeshBuilder.CreateTorus(`gumPressSpring-${index}`, { diameter: 0.35, thickness: 0.075, tessellation: 16 }, this.scene);
+      spring.parent = root;
+      spring.position = new Vector3(offset, 0.08, -0.08);
+      spring.rotation.x = Math.PI / 2;
+      spring.material = this.createMaterial(`gumPressSpringMat-${index}`, GOLD, new Color3(0.45, 0.16, 0.02));
+      parts.push(spring);
+    });
+    this.contraptions.push({ kind: "gumPress", root, x, activated: false, progress: 0, parts });
+  }
+
+  private createSpoolLift(x: number, y: number) {
+    const root = new TransformNode("spoolLiftContraption", this.scene);
+    root.position = new Vector3(x, y, -0.3);
+    const spool = MeshBuilder.CreateCylinder("spoolLiftCore", { height: 1.15, diameter: 0.82, tessellation: 20 }, this.scene);
+    spool.parent = root;
+    spool.rotation.z = Math.PI / 2;
+    spool.position = new Vector3(0, 0.52, 0);
+    spool.material = this.createMaterial("spoolLiftCoreMat", CYAN, new Color3(0.03, 0.18, 0.4));
+    const wheel = MeshBuilder.CreateTorus("spoolLiftWheel", { diameter: 1.18, thickness: 0.12, tessellation: 24 }, this.scene);
+    wheel.parent = root;
+    wheel.position = new Vector3(0, 0.52, -0.08);
+    wheel.material = this.createMaterial("spoolLiftWheelMat", GOLD, new Color3(0.5, 0.16, 0.01));
+    const cable = MeshBuilder.CreateBox("spoolLiftCable", { width: 0.08, height: 2.65, depth: 0.07 }, this.scene);
+    cable.parent = root;
+    cable.position = new Vector3(0.82, 1.5, 0);
+    cable.material = this.createMaterial("spoolLiftCableMat", CREAM, new Color3(0.16, 0.06, 0.01));
+    const hook = MeshBuilder.CreateTorus("spoolLiftHook", { diameter: 0.32, thickness: 0.08, tessellation: 16 }, this.scene);
+    hook.parent = root;
+    hook.position = new Vector3(0.82, 2.75, -0.05);
+    hook.material = this.createMaterial("spoolLiftHookMat", RESCUE_CORAL, GOLD);
+    this.contraptions.push({ kind: "spoolLift", root, x, activated: false, progress: 0, parts: [spool, wheel, cable, hook] });
   }
 
   private createLaceBridge(x: number, y: number, width: number) {
@@ -762,6 +888,7 @@ export class GameWorld {
     this.player.hearts = 3;
     this.player.invulnerable = 1.5;
     this.player.root.setEnabled(true);
+    this.resetContraptions();
     this.message = "Right Shoe is back on the trail.";
     this.publishUi(true);
   }
@@ -803,6 +930,7 @@ export class GameWorld {
       enemy.root.setEnabled(true);
     });
     this.checkpoints.forEach((checkpoint) => { checkpoint.activated = false; });
+    this.resetContraptions();
     if (this.leftShoeHalo) this.leftShoeHalo.scaling = Vector3.One();
     this.publishUi(true);
   }
@@ -915,6 +1043,7 @@ export class GameWorld {
     }
     if (this.mode !== "playing") return;
 
+    this.updateContraptions(delta);
     if (this.isDemo) this.updateDemo(delta);
     if (this.superRun) this.updateSuperRun(delta);
     this.updatePlayer(delta);
@@ -925,6 +1054,93 @@ export class GameWorld {
     this.updateCamera(delta);
     this.checkRescue();
     this.publishUi(false);
+  }
+
+  private updateContraptions(delta: number) {
+    const buttonRun = this.contraptions.find((contraption) => contraption.kind === "buttonRun");
+    const laceLever = this.contraptions.find((contraption) => contraption.kind === "laceLever");
+    const gumPress = this.contraptions.find((contraption) => contraption.kind === "gumPress");
+    const spoolLift = this.contraptions.find((contraption) => contraption.kind === "spoolLift");
+
+    if (buttonRun && !buttonRun.activated && this.player.x > 9.3 && this.player.x < 14.5 && this.buttons >= 3) {
+      this.activateContraption(buttonRun, "BUTTON BALL RUN — coral button released down the shoebox rail.");
+      this.player.dashCharges += 1;
+    }
+    if (laceLever && !laceLever.activated && this.player.lashTimer > 0 && Math.abs(this.player.x - laceLever.x) < 3.1) {
+      this.activateContraption(laceLever, "LACE LEVER — dominoes topple and stitch the bridge tight.");
+    }
+    if (gumPress && !gumPress.activated && this.player.stompTimer > 0 && Math.abs(this.player.x - gumPress.x) < 3.1) {
+      this.activateContraption(gumPress, "GUM STOMP PRESS — the spring ramp pops toward the rescue tower.");
+      this.player.vy = Math.max(this.player.vy, 7.4);
+    }
+    if (spoolLift && !spoolLift.activated && gumPress?.activated && this.player.x > 57.0) {
+      this.activateContraption(spoolLift, "SPOOL LIFT — thread winch raises the final rescue latch.");
+      if (this.leftShoeHalo) this.leftShoeHalo.scaling = new Vector3(1.22, 1.22, 1.22);
+    }
+
+    this.contraptions.forEach((contraption) => {
+      if (!contraption.activated) return;
+      contraption.progress = Math.min(1, contraption.progress + delta * 1.6);
+      const eased = 1 - Math.pow(1 - contraption.progress, 3);
+      if (contraption.kind === "buttonRun") {
+        const ball = contraption.parts[1];
+        ball.position.x = -1.18 + eased * 2.35;
+        ball.rotation.z += delta * 11;
+        contraption.parts[2].scaling.setAll(1 + Math.sin(this.titleTime * 12) * 0.12 * eased);
+      }
+      if (contraption.kind === "laceLever") {
+        contraption.parts[1].rotation.z = 0.24 - eased * 0.82;
+        contraption.parts.slice(3).forEach((domino, index) => {
+          const local = Math.max(0, Math.min(1, (contraption.progress - index * 0.1) * 4.4));
+          domino.rotation.z = -local * 1.28;
+        });
+      }
+      if (contraption.kind === "gumPress") {
+        contraption.parts[0].position.y = 0.24 - eased * 0.16;
+        contraption.parts[1].scaling.y = 1 - eased * 0.36;
+        contraption.parts[2].rotation.z = 0.34 - eased * 0.58;
+      }
+      if (contraption.kind === "spoolLift") {
+        contraption.parts[0].rotation.x += delta * 7.5;
+        contraption.parts[1].rotation.z += delta * 7.5;
+        contraption.parts[3].position.y = 2.75 + eased * 0.42;
+      }
+    });
+  }
+
+  private activateContraption(contraption: Contraption, callout: string) {
+    contraption.activated = true;
+    contraption.progress = 0;
+    this.message = callout;
+    this.spawnSparks(contraption.x, contraption.root.position.y + 0.95, contraption.kind === "gumPress" ? MOSS : contraption.kind === "spoolLift" ? CYAN : GOLD, 19, 3.2);
+    if (this.superRun) this.superRunAction = callout;
+    this.publishUi(true);
+  }
+
+  private resetContraptions() {
+    this.contraptions.forEach((contraption) => {
+      contraption.activated = false;
+      contraption.progress = 0;
+      if (contraption.kind === "buttonRun") {
+        contraption.parts[1].position.x = -1.18;
+        contraption.parts[1].rotation.z = 0;
+        contraption.parts[2].scaling = Vector3.One();
+      }
+      if (contraption.kind === "laceLever") {
+        contraption.parts[1].rotation.z = 0.24;
+        contraption.parts.slice(3).forEach((domino) => { domino.rotation.z = 0; });
+      }
+      if (contraption.kind === "gumPress") {
+        contraption.parts[0].position.y = 0.24;
+        contraption.parts[1].scaling.y = 1;
+        contraption.parts[2].rotation.z = 0.34;
+      }
+      if (contraption.kind === "spoolLift") {
+        contraption.parts[0].rotation.x = 0;
+        contraption.parts[1].rotation.z = 0;
+        contraption.parts[3].position.y = 2.75;
+      }
+    });
   }
 
   private updateDemo(delta: number) {
@@ -1276,6 +1492,17 @@ export class GameWorld {
   }
 
   private publishUi(force: boolean) {
+    const contraptionsActivated = this.contraptions.filter((contraption) => contraption.activated).length;
+    const nextContraption = this.contraptions.find((contraption) => !contraption.activated);
+    const contraptionNames: Record<ContraptionKind, string> = {
+      buttonRun: "BUTTON BALL RUN",
+      laceLever: "LACE LEVER",
+      gumPress: "GUM PRESS",
+      spoolLift: "SPOOL LIFT",
+    };
+    const contraptionStatus = nextContraption
+      ? `NEXT · ${contraptionNames[nextContraption.kind]}`
+      : "ALL LINKS LIVE · RESCUE LATCH OPEN";
     const snapshot: UiSnapshot = {
       mode: this.mode,
       hearts: this.player.hearts,
@@ -1291,6 +1518,8 @@ export class GameWorld {
       shoeForm: this.player.shoeForm,
       laceLash: this.player.laceLash,
       gumStomp: this.player.gumStomp,
+      contraptionsActivated,
+      contraptionStatus,
     };
     const signature = JSON.stringify(snapshot);
     if (!force && signature === this.lastUiSignature) return;

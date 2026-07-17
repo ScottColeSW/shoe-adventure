@@ -20,6 +20,8 @@ const initialSnapshot: UiSnapshot = {
   shoeForm: "starter",
   laceLash: false,
   gumStomp: false,
+  contraptionsActivated: 0,
+  contraptionStatus: "NEXT · BUTTON BALL RUN",
 };
 
 type Command =
@@ -128,6 +130,12 @@ export default function GameCanvas() {
             <em>{heroFormLabel}</em>
           </div>
           <div className="stage-lace-route"><i /><i /><i /><i /><i /><i /></div>
+          <div className="stage-contraption-map" aria-hidden="true">
+            <span className={snapshot.contraptionsActivated > 0 ? "link-live" : ""}>① BALL RUN</span>
+            <span className={snapshot.contraptionsActivated > 1 ? "link-live" : ""}>② LACE LEVER</span>
+            <span className={snapshot.contraptionsActivated > 2 ? "link-live" : ""}>③ GUM PRESS</span>
+            <span className={snapshot.contraptionsActivated > 3 ? "link-live" : ""}>④ SPOOL LIFT</span>
+          </div>
           <div className="stage-rescue-beacon">
             <img className="realistic-shoe-mark stage-lefty" src={gameAssets.leftShoeRealistic} alt="" />
             <em>LEFTY</em>
@@ -154,6 +162,11 @@ export default function GameCanvas() {
             <div className="rescue-meter" aria-label={`Rescue route ${rescueProgress}% complete`}>
               <span><i style={{ width: `${rescueProgress}%` }} /></span>
               <b>LEFTY BEACON · {rescueProgress}%</b>
+            </div>
+            <div className="contraption-readout" aria-label={`${snapshot.contraptionsActivated} of 4 contraptions activated`}>
+              <span>CHAIN BOARD</span>
+              <b>{snapshot.contraptionStatus}</b>
+              <i>{snapshot.contraptionsActivated}/4 LIVE</i>
             </div>
           </div>
 
@@ -194,7 +207,7 @@ export default function GameCanvas() {
             <div className="chapter-label">{snapshot.mode === "won" ? "RESCUE COMPLETE" : snapshot.mode === "lost" ? "TRY THE STITCHED PATH AGAIN" : snapshot.mode === "paused" ? "MID-QUEST" : "A TINY SHOE. A GIANT PROMISE."}</div>
             <h1>{modeHeading}</h1>
             {snapshot.mode === "title" ? (
-              <p className="story-intro">The Right Shoe has crossed every shoebox, lace bridge, and laundry chute in the room. Now the Left Shoe is trapped in the rogue roller skate’s tower. Run, jump, stomp, and stitch the pair back together.</p>
+              <p className="story-intro">The Right Shoe has crossed every shoebox, lace bridge, and laundry chute in the room. Now the Left Shoe is trapped in the rogue roller skate’s tower. Trigger the Button Ball Run, snap the Lace Lever, launch the Gum Press, and raise the Spool Lift to stitch the pair back together.</p>
             ) : snapshot.mode === "won" ? (
               <p className="story-intro">{snapshot.message} Collect Coral Chrome, Moonstep Runner, Lace Lash, and Gum Stomp on your next rescue run — then watch the pair celebrate every stitch home.</p>
             ) : (

@@ -28,3 +28,11 @@
 - [x] Implement Lace Lash and Gum Stomp as visible player abilities with combat feedback.
 - [x] Build a dedicated win screen where Right Shoe and Left Shoe dance together.
 - [x] Validate the full upgrade sequence and reunion ending on desktop and mobile.
+
+## Chain-Reaction Contraption Pass
+
+- [x] Define original Rube Goldberg-inspired contraptions, hazards, and chain-reaction objectives for the shoe-rescue route.
+- [x] Add visual stage props such as levers, ramps, rolling balls, dominoes, and catch mechanisms.
+- [x] Implement interactive triggers that unlock routes, move hazards, or create power-up opportunities.
+- [x] Update mission language and spectator callouts to describe the contraption actions clearly.
+- [x] Validate the revised desktop and mobile game states for clarity, playability, and visual cohesion.

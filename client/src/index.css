@@ -183,6 +183,48 @@ button:focus-visible {
 .stage-lace-route i:nth-child(5) { left: 70%; }
 .stage-lace-route i:nth-child(6) { right: 4%; top: 0.18rem; }
 
+.stage-contraption-map {
+  position: fixed;
+  z-index: 5;
+  right: 28vw;
+  bottom: 13vh;
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 0.24rem 0.5rem;
+  max-width: 16rem;
+  padding: 0.42rem 0.55rem;
+  border: 1px dashed rgba(255, 207, 99, 0.35);
+  color: rgba(255, 245, 221, 0.52);
+  background: rgba(6, 14, 36, 0.56);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 18px rgba(0, 0, 0, 0.2);
+  font-size: 0.42rem;
+  letter-spacing: 0.1em;
+  transform: rotate(-1deg);
+}
+
+.stage-contraption-map span {
+  position: relative;
+  padding-left: 0.34rem;
+}
+
+.stage-contraption-map span::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0.16rem;
+  height: 0.16rem;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 7px currentColor;
+  content: "";
+  transform: translateY(-50%);
+}
+
+.stage-contraption-map .link-live {
+  color: #ffcf63;
+  text-shadow: 0 0 8px rgba(255, 207, 99, 0.62);
+}
+
 .stage-rescue-beacon {
   right: 18vw;
   bottom: 25vh;
@@ -361,6 +403,42 @@ button:focus-visible {
   font-size: 0.48rem;
   font-weight: 500;
   letter-spacing: 0.12em;
+}
+
+.contraption-readout {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.42rem;
+  margin-top: 0.58rem;
+  padding-top: 0.48rem;
+  border-top: 1px dashed rgba(255, 207, 99, 0.34);
+  color: #ffe6b0;
+  font-size: 0.45rem;
+  letter-spacing: 0.085em;
+}
+
+.contraption-readout span {
+  color: #ffb779;
+  font-weight: 700;
+}
+
+.contraption-readout b {
+  min-width: 0;
+  overflow: hidden;
+  color: #dffeff;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contraption-readout i {
+  padding: 0.17rem 0.22rem;
+  border: 1px solid rgba(255, 207, 99, 0.45);
+  color: #ffcf63;
+  font-size: 0.39rem;
+  font-style: normal;
+  white-space: nowrap;
 }
 
  .hud-powerups {
