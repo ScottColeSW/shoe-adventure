@@ -18,7 +18,8 @@ import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { gameAssets } from "./assets";
 
 export type GameMode = "title" | "playing" | "paused" | "won" | "lost";
-type PickupKind = "button" | "feather" | "dash" | "heart" | "moon";
+type PickupKind = "button" | "feather" | "dash" | "heart" | "moon" | "chrome" | "moonstep" | "lash" | "gum";
+type ShoeForm = "starter" | "coralChrome" | "moonstep";
 type EnemyKind = "lace" | "slime" | "skate";
 type GameCommand =
   | "start"
@@ -26,11 +27,14 @@ type GameCommand =
   | "pause"
   | "jump"
   | "dash"
+  | "lash"
+  | "stomp"
   | "holdLeft"
   | "holdRight"
   | "releaseLeft"
   | "releaseRight"
-  | "superRun";
+  | "superRun"
+  | "celebrate";
 
 interface Platform {
   x: number;
@@ -57,6 +61,13 @@ interface PlayerState {
   doubleJumps: number;
   dashCharges: number;
   moonTimer: number;
+  shoeForm: ShoeForm;
+  laceLash: boolean;
+  gumStomp: boolean;
+  lashCooldown: number;
+  stompCooldown: number;
+  lashTimer: number;
+  stompTimer: number;
 }
 
 interface Enemy {
@@ -109,6 +120,9 @@ export interface UiSnapshot {
   rescued: boolean;
   superRun: boolean;
   superRunAction: string;
+  shoeForm: ShoeForm;
+  laceLash: boolean;
+  gumStomp: boolean;
 }
 
 const WORLD_END = 66;
@@ -138,6 +152,7 @@ export class GameWorld {
   private readonly held = { left: false, right: false };
   private readonly isDemo: boolean;
   private readonly isSuperRunPreview: boolean;
+  private readonly isReunionPreview: boolean;
   private player: PlayerState;
   private mode: GameMode = "title";
   private buttons = 0;
@@ -151,6 +166,9 @@ export class GameWorld {
   private titleTime = 0;
   private leftShoe: TransformNode | null = null;
   private leftShoeHalo: Mesh | null = null;
+  private heroSprite: Mesh | null = null;
+  private heroSpriteMaterial: StandardMaterial | null = null;
+  private heroHalo: Mesh | null = null;
   private onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
   private onKeyUpBound = (event: KeyboardEvent) => this.onKeyUp(event);
   private onCommandBound = (event: Event) => this.onCommand(event as CustomEvent<GameCommand>);
@@ -164,10 +182,12 @@ export class GameWorld {
     const query = new URLSearchParams(window.location.search);
     this.isDemo = query.has("demo");
     this.isSuperRunPreview = query.has("superrun");
+    this.isReunionPreview = query.has("dance");
     this.player = this.createPlayer();
     this.createWorld();
     this.bindInput();
     if (this.isSuperRunPreview) this.startSuperRun();
+    else if (this.isReunionPreview) this.previewReunion();
     else this.publishUi(true);
 
     this.scene.onBeforeRenderObservable.add(() => {
@@ -374,7 +394,7 @@ export class GameWorld {
     knot.material = this.createMaterial("rightHeartEyeletMat", GOLD, new Color3(0.56, 0.22, 0.03));
 
     root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
-    this.addFootwearBillboard(
+    this.heroSprite = this.addFootwearBillboard(
       "rightShoeRealisticSprite",
       gameAssets.rightShoeRealistic,
       root,
@@ -383,6 +403,21 @@ export class GameWorld {
       new Vector3(0.06, 0.9, -0.64),
       RESCUE_CORAL,
     );
+    this.heroSpriteMaterial = this.heroSprite.material as StandardMaterial;
+    this.heroSpriteMaterial.emissiveColor = RESCUE_CORAL.scale(0.34);
+    this.heroSpriteMaterial.specularColor = new Color3(1, 0.92, 0.78);
+    this.heroSpriteMaterial.specularPower = 96;
+
+    const halo = MeshBuilder.CreateDisc("rightShoeGlowHalo", { radius: 1.34, tessellation: 40 }, this.scene);
+    halo.parent = root;
+    halo.position = new Vector3(0.08, 0.84, -0.72);
+    const haloMaterial = this.createMaterial("rightShoeGlowHaloMat", RESCUE_CORAL, GOLD);
+    haloMaterial.alpha = 0.19;
+    haloMaterial.backFaceCulling = false;
+    halo.material = haloMaterial;
+    halo.isPickable = false;
+    this.heroHalo = halo;
+
     root.position = new Vector3(0, -4.2, -0.4);
     return {
       root,
@@ -400,6 +435,13 @@ export class GameWorld {
       doubleJumps: 0,
       dashCharges: 0,
       moonTimer: 0,
+      shoeForm: "starter",
+      laceLash: false,
+      gumStomp: false,
+      lashCooldown: 0,
+      stompCooldown: 0,
+      lashTimer: 0,
+      stompTimer: 0,
     };
   }
 
@@ -497,6 +539,10 @@ export class GameWorld {
     this.pickups.push(this.createPickup("moon", 47.2, -0.82));
     this.pickups.push(this.createPickup("feather", 53.1, 2.0));
     this.pickups.push(this.createPickup("dash", 58.1, 3.0));
+    this.pickups.push(this.createPickup("chrome", 13.0, -2.5));
+    this.pickups.push(this.createPickup("moonstep", 30.2, -2.2));
+    this.pickups.push(this.createPickup("lash", 42.0, 0.75));
+    this.pickups.push(this.createPickup("gum", 55.0, 2.95));
   }
 
   private createPickup(kind: PickupKind, x: number, y: number): Pickup {
@@ -524,9 +570,23 @@ export class GameWorld {
       icon = MeshBuilder.CreateSphere(`heartSole-${x}`, { diameter: 0.55, segments: 20 }, this.scene);
       icon.scaling = new Vector3(1.02, 0.74, 0.34);
       icon.material = this.createMaterial(`heartMat-${x}`, RESCUE_CORAL, new Color3(0.58, 0.035, 0.02));
-    } else {
+    } else if (kind === "moon") {
       icon = MeshBuilder.CreateTorus(`moonInsole-${x}`, { diameter: 0.62, thickness: 0.16, tessellation: 22 }, this.scene);
       icon.material = this.createMaterial(`moonMat-${x}`, VIOLET, new Color3(0.18, 0.02, 0.38));
+    } else if (kind === "chrome") {
+      icon = MeshBuilder.CreateSphere(`coralChrome-${x}`, { diameter: 0.68, segments: 24 }, this.scene);
+      icon.scaling = new Vector3(0.9, 0.9, 0.32);
+      icon.material = this.createMaterial(`coralChromeMat-${x}`, RESCUE_CORAL, GOLD);
+    } else if (kind === "moonstep") {
+      icon = MeshBuilder.CreateTorus(`moonstepPatch-${x}`, { diameter: 0.7, thickness: 0.16, tessellation: 24 }, this.scene);
+      icon.material = this.createMaterial(`moonstepPatchMat-${x}`, CYAN, new Color3(0.1, 0.22, 0.74));
+    } else if (kind === "lash") {
+      icon = MeshBuilder.CreateTorus(`laceLashPatch-${x}`, { diameter: 0.74, thickness: 0.105, tessellation: 24 }, this.scene);
+      icon.scaling = new Vector3(1.05, 0.62, 1);
+      icon.material = this.createMaterial(`laceLashPatchMat-${x}`, CREAM, RESCUE_CORAL);
+    } else {
+      icon = MeshBuilder.CreateDisc(`gumStompPatch-${x}`, { radius: 0.34, tessellation: 24 }, this.scene);
+      icon.material = this.createMaterial(`gumStompPatchMat-${x}`, MOSS, new Color3(0.88, 0.16, 0.44));
     }
     icon.parent = root;
     icon.position.z = -0.25;
@@ -629,7 +689,7 @@ export class GameWorld {
 
   private onKeyDown(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
-    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "shift", "r", "escape"].includes(key)) {
+    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "q", "e", "shift", "r", "escape"].includes(key)) {
       event.preventDefault();
     }
     if (this.superRun && key !== "escape") return;
@@ -637,6 +697,8 @@ export class GameWorld {
     if (key === "arrowright" || key === "d") this.held.right = true;
     if (key === "arrowup" || key === "w" || key === " ") this.tryJump();
     if (key === "shift") this.tryDash();
+    if (key === "q") this.tryLaceLash();
+    if (key === "e") this.tryGumStomp();
     if (key === "r") this.restart();
     if (key === "escape") this.togglePause();
     if ((key === "enter" || key === " ") && this.mode === "title") this.start();
@@ -655,9 +717,12 @@ export class GameWorld {
     if (command === "pause") this.togglePause();
     if (command === "jump") this.tryJump();
     if (command === "dash") this.tryDash();
+    if (command === "lash") this.tryLaceLash();
+    if (command === "stomp") this.tryGumStomp();
     if (command === "holdLeft") this.held.left = true;
     if (command === "holdRight") this.held.right = true;
     if (command === "superRun") this.startSuperRun();
+    if (command === "celebrate") this.previewReunion();
     if (this.superRun && !["pause", "restart"].includes(command)) return;
     if (command === "releaseLeft") this.held.left = false;
     if (command === "releaseRight") this.held.right = false;
@@ -715,6 +780,14 @@ export class GameWorld {
     this.player.doubleJumps = 0;
     this.player.dashCharges = 0;
     this.player.moonTimer = 0;
+    this.player.shoeForm = "starter";
+    this.player.laceLash = false;
+    this.player.gumStomp = false;
+    this.player.lashCooldown = 0;
+    this.player.stompCooldown = 0;
+    this.player.lashTimer = 0;
+    this.player.stompTimer = 0;
+    this.applyShoeForm("starter");
     this.player.invulnerable = 2;
     this.player.jumpUsed = false;
     this.player.root.setEnabled(true);
@@ -731,6 +804,17 @@ export class GameWorld {
     });
     this.checkpoints.forEach((checkpoint) => { checkpoint.activated = false; });
     if (this.leftShoeHalo) this.leftShoeHalo.scaling = Vector3.One();
+    this.publishUi(true);
+  }
+
+  private previewReunion() {
+    this.superRun = false;
+    this.mode = "won";
+    this.message = "Pair restored! Right Shoe and Left Shoe dance their stitches home.";
+    this.held.left = false;
+    this.held.right = false;
+    if (this.leftShoeHalo) this.leftShoeHalo.scaling = new Vector3(1.52, 1.52, 1.52);
+    this.spawnSparks(62.4, 4.2, RESCUE_CORAL, 46, 4.2);
     this.publishUi(true);
   }
 
@@ -764,6 +848,59 @@ export class GameWorld {
     this.player.vx = this.player.facing * 20;
     this.message = "Lace Dash burns a coral trail.";
     this.spawnSparks(this.player.x - this.player.facing * 0.42, this.player.bottom + 0.62, RESCUE_CORAL, 14, 3.4);
+    this.publishUi(true);
+  }
+
+  private applyShoeForm(form: ShoeForm) {
+    this.player.shoeForm = form;
+    const asset = form === "coralChrome" ? gameAssets.rightShoeCoralChrome : form === "moonstep" ? gameAssets.rightShoeMoonstep : gameAssets.rightShoeRealistic;
+    const glow = form === "moonstep" ? CYAN : form === "coralChrome" ? GOLD : RESCUE_CORAL;
+    if (this.heroSpriteMaterial) {
+      const texture = new Texture(asset, this.scene);
+      texture.hasAlpha = true;
+      this.heroSpriteMaterial.diffuseTexture = texture;
+      this.heroSpriteMaterial.opacityTexture = texture;
+      this.heroSpriteMaterial.useAlphaFromDiffuseTexture = true;
+      this.heroSpriteMaterial.emissiveColor = glow.scale(form === "starter" ? 0.34 : 0.46);
+      this.heroSpriteMaterial.specularColor = new Color3(1, 0.95, 0.83);
+      this.heroSpriteMaterial.specularPower = form === "starter" ? 96 : 120;
+    }
+    if (this.heroHalo) {
+      const material = this.heroHalo.material as StandardMaterial | null;
+      if (material) {
+        material.diffuseColor = glow;
+        material.emissiveColor = glow.scale(0.46);
+        material.alpha = form === "starter" ? 0.19 : 0.3;
+      }
+    }
+    this.player.root.scaling.y = form === "moonstep" ? 1.07 : 1;
+    this.player.root.scaling.z = form === "coralChrome" ? 1.04 : 1;
+  }
+
+  private tryLaceLash() {
+    if (this.mode !== "playing" || !this.player.laceLash || this.player.lashCooldown > 0) return;
+    this.player.lashCooldown = 0.72;
+    this.player.lashTimer = 0.34;
+    this.player.invulnerable = Math.max(this.player.invulnerable, 0.32);
+    const targets = this.enemies.filter((enemy) =>
+      enemy.alive && (enemy.x - this.player.x) * this.player.facing > -0.35 && (enemy.x - this.player.x) * this.player.facing < 3.45 && Math.abs(enemy.bottom - this.player.bottom) < 2.1,
+    );
+    this.spawnSparks(this.player.x + this.player.facing * 1.15, this.player.bottom + 0.72, CREAM, 16, 3.8);
+    targets.forEach((enemy) => this.defeatEnemy(enemy));
+    this.message = targets.length > 0 ? "Lace Lash snaps the shoe fiends off the route." : "Lace Lash cracks across the stitched air.";
+    this.publishUi(true);
+  }
+
+  private tryGumStomp() {
+    if (this.mode !== "playing" || !this.player.gumStomp || this.player.stompCooldown > 0) return;
+    this.player.stompCooldown = 1.25;
+    this.player.stompTimer = 0.42;
+    this.player.invulnerable = Math.max(this.player.invulnerable, 0.48);
+    if (this.player.grounded) this.player.vy = 4.2;
+    const targets = this.enemies.filter((enemy) => enemy.alive && Math.abs(enemy.x - this.player.x) < 2.45 && Math.abs(enemy.bottom - this.player.bottom) < 2.35);
+    this.spawnSparks(this.player.x, this.player.bottom + 0.34, MOSS, 22, 4.1);
+    targets.forEach((enemy) => this.defeatEnemy(enemy));
+    this.message = targets.length > 0 ? "Gum Stomp sticks the shoe fiends in place — then bounces clear!" : "Gum Stomp lands with a bright sticky bounce.";
     this.publishUi(true);
   }
 
@@ -812,9 +949,13 @@ export class GameWorld {
     this.held.right = this.player.x < 63.2;
 
     if (this.player.x >= 6.6) this.claimSuperRunPowerup("feather", "WINGTIP FLIGHT — double-jump unlocked.");
+    if (this.player.x >= 12.8) this.claimSuperRunPowerup("chrome", "CORAL CHROME — hero shine upgraded.");
     if (this.player.x >= 18.8) this.claimSuperRunPowerup("dash", "LACE DASH — coral boost charged.");
+    if (this.player.x >= 30.0) this.claimSuperRunPowerup("moonstep", "MOONSTEP RUNNER — cobalt speed form unlocked.");
     if (this.player.x >= 33.1) this.claimSuperRunPowerup("heart", "HEART SOLE — route integrity restored.");
+    if (this.player.x >= 41.7) this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
     if (this.player.x >= 45.8) this.claimSuperRunPowerup("moon", "MOON INSOLE — enemies slowed for the finale.");
+    if (this.player.x >= 54.8) this.claimSuperRunPowerup("gum", "GUM STOMP — sticky sole impact armed.");
 
     const platformAhead = this.platforms.some(
       (platform) =>
@@ -832,7 +973,17 @@ export class GameWorld {
     const target = this.enemies.find(
       (enemy) => enemy.alive && enemy.x - this.player.x < 1.38 && enemy.x >= this.player.x - 0.8,
     );
-    if (target) this.performSuperKick(target);
+    if (target) {
+      if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) {
+        this.tryGumStomp();
+        this.superRunAction = "GUM STOMP — rogue footwear pinned by a sticky sole burst.";
+      } else if (this.player.laceLash && this.player.lashCooldown <= 0) {
+        this.tryLaceLash();
+        this.superRunAction = "LACE LASH — stitched thread snaps the lane clear.";
+      } else {
+        this.performSuperKick(target);
+      }
+    }
     if (this.player.x > 60.1 && this.mode === "playing") this.superRunAction = "RESCUE PROTOCOL — crossing into Lefty’s tower.";
   }
 
@@ -860,6 +1011,10 @@ export class GameWorld {
     this.player.invulnerable = Math.max(0, this.player.invulnerable - delta);
     this.player.dashTimer = Math.max(0, this.player.dashTimer - delta);
     this.player.dashCooldown = Math.max(0, this.player.dashCooldown - delta);
+    this.player.lashCooldown = Math.max(0, this.player.lashCooldown - delta);
+    this.player.stompCooldown = Math.max(0, this.player.stompCooldown - delta);
+    this.player.lashTimer = Math.max(0, this.player.lashTimer - delta);
+    this.player.stompTimer = Math.max(0, this.player.stompTimer - delta);
     this.player.moonTimer = Math.max(0, this.player.moonTimer - delta);
 
     const direction = (this.held.right ? 1 : 0) - (this.held.left ? 1 : 0);
@@ -897,8 +1052,17 @@ export class GameWorld {
     this.player.root.scaling.x = this.player.facing;
     this.player.root.rotation.z = Math.max(-0.18, Math.min(0.18, -this.player.vx * 0.016));
     if (this.superRunKickTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.62;
+    if (this.player.lashTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.4;
+    if (this.player.stompTimer > 0) this.player.root.rotation.z = this.player.facing * 0.16;
+    if (this.heroHalo) {
+      const pulse = 1 + Math.sin(this.titleTime * 7.4) * 0.06 + (this.player.shoeForm === "starter" ? 0 : 0.07);
+      this.heroHalo.scaling = new Vector3(pulse, pulse, 1);
+    }
     if (this.player.dashTimer > 0) {
       this.spawnSparks(this.player.x - this.player.facing * 0.5, this.player.bottom + 0.65, RESCUE_CORAL, 1, 1.4);
+    }
+    if (this.player.lashTimer > 0) {
+      this.spawnSparks(this.player.x + this.player.facing * 1.15, this.player.bottom + 0.8, CREAM, 1, 1.2);
     }
   }
 
@@ -1049,6 +1213,26 @@ export class GameWorld {
       this.message = "Moon Insole: shoe fiends slow to a crawl.";
       this.spawnSparks(pickup.x, pickup.y, VIOLET, 18, 2.6);
     }
+    if (pickup.kind === "chrome") {
+      this.applyShoeForm("coralChrome");
+      this.message = "Coral Chrome: Right Shoe shines brighter than the rescue stars.";
+      this.spawnSparks(pickup.x, pickup.y, GOLD, 22, 3.1);
+    }
+    if (pickup.kind === "moonstep") {
+      this.applyShoeForm("moonstep");
+      this.message = "Moonstep Runner: a cobalt sneaker form is stitched in.";
+      this.spawnSparks(pickup.x, pickup.y, CYAN, 24, 3.25);
+    }
+    if (pickup.kind === "lash") {
+      this.player.laceLash = true;
+      this.message = "Lace Lash unlocked: press Q or tap LASH to crack the thread whip.";
+      this.spawnSparks(pickup.x, pickup.y, CREAM, 20, 3.0);
+    }
+    if (pickup.kind === "gum") {
+      this.player.gumStomp = true;
+      this.message = "Gum Stomp unlocked: press E or tap STOMP for sticky sole impact.";
+      this.spawnSparks(pickup.x, pickup.y, MOSS, 24, 3.2);
+    }
     this.publishUi(true);
   }
 
@@ -1104,6 +1288,9 @@ export class GameWorld {
       rescued: this.mode === "won",
       superRun: this.superRun,
       superRunAction: this.superRunAction,
+      shoeForm: this.player.shoeForm,
+      laceLash: this.player.laceLash,
+      gumStomp: this.player.gumStomp,
     };
     const signature = JSON.stringify(snapshot);
     if (!force && signature === this.lastUiSignature) return;

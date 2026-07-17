@@ -92,3 +92,8 @@ The mark is a **coral-red stitched heart formed by two opposing shoe silhouettes
 ## Style Decisions
 
 The opening and active play states must make the rescue premise legible at a glance: one visible coral Right Shoe hero, one visible Left Shoe rescue cue, and a household-object platform or route are always present. **Sunset navy** remains the atmospheric field, while **Rescue Coral `#FF5A4F`** is reserved for the hero, rescue objective, primary action, and emotional progress signals. HUD language follows a stitched-patch toy-workshop system: Fraunces for mission and story beats, DM Mono for counters and controls, and copy that references leaping, laces, soles, pairs, and rescue.
+
+
+## Style Decisions — Bright Hero and Reunion Pass
+
+The opening frame must visibly establish the rescue in one asymmetric postcard: a bright **Rescue Coral** Right Shoe, a named Left Shoe rescue beacon, and a stitched route between household-scale terrain. The title treats the two shoes as oversized stitched mission tokens, with **Shine Mode** and **Rescue Beacon** labels carrying the core emotional premise before play begins. Every mode retains the sunset-navy bedroom world but changes its action reading through brighter hero treatment, form labels, power-up callouts, an AI broadcast ribbon, or the final dancing reunion.

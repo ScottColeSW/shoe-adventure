@@ -19,3 +19,12 @@
 - [x] Implement deterministic AI autopilot decisions for movement, jumping, power-up pickup, dashing, and special kicks.
 - [x] Add a Super Run launch control, spectator status HUD, and in-world action callouts.
 - [x] Test the AI sequence through the victory ending at desktop and mobile widths.
+
+## Bright Hero, Upgrades, and Reunion Finale
+
+- [x] Define the upgrade order, visual transformations, combat effects, and final dance celebration.
+- [x] Create a brighter, shinier hero treatment and upgrade-ready footwear visuals.
+- [x] Add collectible color-shift and shoe-type transformation upgrades to the player progression.
+- [x] Implement Lace Lash and Gum Stomp as visible player abilities with combat feedback.
+- [x] Build a dedicated win screen where Right Shoe and Left Shoe dance together.
+- [x] Validate the full upgrade sequence and reunion ending on desktop and mobile.

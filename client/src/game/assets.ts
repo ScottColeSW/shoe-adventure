@@ -11,6 +11,9 @@ export const gameAssets = {
   // A mirrored matching pair preserves the rescue read while the reserved Left Shoe render is unavailable.
   leftShoeRealistic: "/manus-storage/right-shoe-realistic_a31b4b73.png",
   rollerSkateRealistic: "/manus-storage/roller-skate-realistic_8767122a.png",
+  rightShoeCoralChrome: "/manus-storage/right-shoe-coral-chrome_420828e0.png",
+  rightShoeMoonstep: "/manus-storage/right-shoe-moonstep_a92ccd54.png",
+  reunionDance: "/manus-storage/shoe-reunion-dance_8909f193.png",
 } as const;
 
 export type GameAssetKey = keyof typeof gameAssets;

@@ -33,3 +33,11 @@ The trusted full-page visual review produced blank captures because the game sce
 ## Realistic Footwear Asset Fallback
 
 The generated `right-shoe-realistic` asset at `/manus-storage/right-shoe-realistic_a31b4b73.png` renders successfully in the game as the realistic hero. The reserved Left Shoe asset at `/manus-storage/left-shoe-realistic_35dfc931.png` did not resolve into usable art during visual validation, so the game now mirrors the successful Right Shoe asset for Left Shoe via CSS. The roller-skate asset remains registered at `/manus-storage/roller-skate-realistic_8767122a.png`; retain procedural meshes as subtle fallback geometry beneath its billboard.
+
+## 2026-07-17 — Hero Upgrade and Reunion Visual Check
+
+Direct browser verification showed that the title screen and `?dance` reunion route render as a coherent navy-and-coral toy-bedroom adventure. The title has shoebox and laundry terrain, a lace bridge, roller-skate threat, rescue-heart cue, and visible Right/Left footwear thumbnails; the dance route shows the celebratory artwork and 100% beacon state. The automated multi-route capture returned navy-only images because fixed-position game layers are not faithfully represented there, so direct browser checks are the reliable visual verification source for this revision.
+
+## 2026-07-17 — Active Upgrade Route Check
+
+The live `?superrun` view rendered the bright coral Right Shoe, the roller-skate threat, shoebox terrain, lace bridge, power-up pickups, AI status ribbon, mission HUD, and a 35% Lefty beacon state in the same frame. This validates that the active world expresses the toy-scale rescue route and that the Super Run begins with a visible Wingtip Flight upgrade state. The route continues to expose later color-form and combat upgrades after the early pickup sequence.

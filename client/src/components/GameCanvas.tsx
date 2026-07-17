@@ -17,6 +17,9 @@ const initialSnapshot: UiSnapshot = {
   rescued: false,
   superRun: false,
   superRunAction: "AI standing by.",
+  shoeForm: "starter",
+  laceLash: false,
+  gumStomp: false,
 };
 
 type Command =
@@ -25,11 +28,14 @@ type Command =
   | "pause"
   | "jump"
   | "dash"
+  | "lash"
+  | "stomp"
   | "holdLeft"
   | "holdRight"
   | "releaseLeft"
   | "releaseRight"
-  | "superRun";
+  | "superRun"
+  | "celebrate";
 
 function dispatchCommand(command: Command) {
   window.dispatchEvent(new CustomEvent<Command>("shoe-adventure:command", { detail: command }));
@@ -92,6 +98,12 @@ export default function GameCanvas() {
     if (snapshot.mode === "paused") return "The rescue waits.";
     return "Shoe Adventure";
   }, [snapshot.mode]);
+  const heroArt = snapshot.shoeForm === "moonstep"
+    ? gameAssets.rightShoeMoonstep
+    : snapshot.shoeForm === "coralChrome" || snapshot.mode === "title" || snapshot.mode === "won"
+      ? gameAssets.rightShoeCoralChrome
+      : gameAssets.rightShoeRealistic;
+  const heroFormLabel = snapshot.shoeForm === "moonstep" ? "MOONSTEP RUNNER" : snapshot.shoeForm === "coralChrome" ? "CORAL CHROME" : "BRIGHT STARTER";
 
   return (
     <main
@@ -112,8 +124,8 @@ export default function GameCanvas() {
         <div className="stage-storyline" aria-hidden="true">
           <div className="stage-box stage-box-left"><span>SHOEBOX CLIFF</span></div>
           <div className="stage-hero-wrap">
-            <img className="realistic-shoe-mark stage-righty" src={gameAssets.rightShoeRealistic} alt="" />
-            <em>RIGHTY</em>
+            <img className={`realistic-shoe-mark stage-righty form-${snapshot.shoeForm}`} src={heroArt} alt="" />
+            <em>{heroFormLabel}</em>
           </div>
           <div className="stage-lace-route"><i /><i /><i /><i /><i /><i /></div>
           <div className="stage-rescue-beacon">
@@ -152,6 +164,11 @@ export default function GameCanvas() {
               <span title="Lace Dash">DASH <b>{snapshot.dashCharges}</b></span>
               <span title="Moon Insole">MOON <b>{snapshot.moonSeconds || "—"}</b></span>
             </div>
+            <div className="upgrade-readout">
+              <b>{heroFormLabel}</b>
+              <span className={snapshot.laceLash ? "upgrade-unlocked" : ""}>Q · LACE LASH</span>
+              <span className={snapshot.gumStomp ? "upgrade-unlocked" : ""}>E · GUM STOMP</span>
+            </div>
             <div className="powerup-stitches" aria-hidden="true"><i /><i /><i /></div>
           </div>
 
@@ -178,15 +195,30 @@ export default function GameCanvas() {
             <h1>{modeHeading}</h1>
             {snapshot.mode === "title" ? (
               <p className="story-intro">The Right Shoe has crossed every shoebox, lace bridge, and laundry chute in the room. Now the Left Shoe is trapped in the rogue roller skate’s tower. Run, jump, stomp, and stitch the pair back together.</p>
+            ) : snapshot.mode === "won" ? (
+              <p className="story-intro">{snapshot.message} Collect Coral Chrome, Moonstep Runner, Lace Lash, and Gum Stomp on your next rescue run — then watch the pair celebrate every stitch home.</p>
             ) : (
               <p className="story-intro">{snapshot.message}</p>
             )}
 
             {snapshot.mode === "title" && (
-              <div className="story-hero-strip" aria-hidden="true">
-                <img className="realistic-shoe-mark story-righty" src={gameAssets.rightShoeRealistic} alt="" />
+              <div className="story-hero-strip" aria-label="Right Shoe begins the rescue route toward Left Shoe">
+                <div className="story-shoe-card story-shoe-card-right">
+                  <img className="realistic-shoe-mark story-righty form-coralChrome" src={heroArt} alt="Bright coral Right Shoe" />
+                  <b>RIGHTY <small>SHINE MODE</small></b>
+                </div>
                 <span className="story-rule" />
-                <img className="realistic-shoe-mark story-lefty" src={gameAssets.leftShoeRealistic} alt="" />
+                <div className="story-shoe-card story-shoe-card-left">
+                  <img className="realistic-shoe-mark story-lefty" src={gameAssets.leftShoeRealistic} alt="Left Shoe awaiting rescue" />
+                  <b>LEFTY <small>RESCUE BEACON</small></b>
+                </div>
+              </div>
+            )}
+            {snapshot.mode === "won" && (
+              <div className="reunion-dance" aria-label="Right Shoe and Left Shoe dance together after their rescue">
+                <div className="dance-spark dance-spark-one" /><div className="dance-spark dance-spark-two" /><div className="dance-spark dance-spark-three" />
+                <img src={gameAssets.reunionDance} alt="Right Shoe and Left Shoe dancing together" />
+                <b>THE PAIR DANCE</b>
               </div>
             )}
 
@@ -199,8 +231,14 @@ export default function GameCanvas() {
               {snapshot.mode === "title" && (
                 <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>WATCH SUPER RUN <span>✦</span></button>
               )}
+              {snapshot.mode === "title" && (
+                <button className="secondary-action reunion-preview-action" type="button" onClick={() => dispatchCommand("celebrate")}>WATCH THE PAIR DANCE</button>
+              )}
               {snapshot.mode === "won" && snapshot.superRun && (
                 <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>REPLAY SUPER RUN <span>✦</span></button>
+              )}
+              {snapshot.mode === "won" && (
+                <button className="secondary-action reunion-preview-action" type="button" onClick={() => dispatchCommand("celebrate")}>DANCE AGAIN</button>
               )}
               {snapshot.mode !== "title" && snapshot.mode !== "won" && (
                 <button className="secondary-action" type="button" onClick={() => dispatchCommand("restart")}>RESTART FROM CHECKPOINT</button>
@@ -212,6 +250,8 @@ export default function GameCanvas() {
                 <span><kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> RUN</span>
                 <span><kbd>SPACE</kbd> JUMP</span>
                 <span><kbd>SHIFT</kbd> LACE DASH</span>
+                <span><kbd>Q</kbd> LACE LASH</span>
+                <span><kbd>E</kbd> GUM STOMP</span>
               </div>
             )}
           </div>
@@ -237,6 +277,8 @@ export default function GameCanvas() {
             >→</button>
           </div>
           <div className="touch-cluster touch-action">
+            {snapshot.laceLash && <button type="button" className="lash-touch" onPointerDown={() => dispatchCommand("lash")}>LASH</button>}
+            {snapshot.gumStomp && <button type="button" className="stomp-touch" onPointerDown={() => dispatchCommand("stomp")}>STOMP</button>}
             <button type="button" className="dash-touch" onPointerDown={() => dispatchCommand("dash")}>DASH</button>
             <button type="button" className="jump-touch" onPointerDown={() => dispatchCommand("jump")}>JUMP</button>
           </div>
