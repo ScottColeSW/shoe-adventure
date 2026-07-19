@@ -17,6 +17,9 @@ const initialSnapshot: UiSnapshot = {
   rescued: false,
   superRun: false,
   superRunAction: "AI standing by.",
+  superRunStage: 0,
+  superRunStageLabel: "STANDBY",
+  superRunCoverage: "0/0 power-ups · 0/0 enemies",
   shoeForm: "starter",
   laceLash: false,
   gumStomp: false,
@@ -189,6 +192,13 @@ export default function GameCanvas() {
             <div className={`boss-readout ${snapshot.bossDefeated ? "boss-cleared" : ""}`} aria-label={`Final encounter: ${snapshot.bossName}`}>
               <span>FINAL GATE</span><b>{snapshot.bossName}</b>
             </div>
+            {snapshot.superRun && (
+              <div className="super-run-stage" aria-label={`Super Run stage ${snapshot.superRunStage} of 3: ${snapshot.superRunStageLabel}. ${snapshot.superRunCoverage}`}>
+                <span>STAGE {snapshot.superRunStage}/3</span>
+                <b>{snapshot.superRunStageLabel}</b>
+                <i>{snapshot.superRunCoverage}</i>
+              </div>
+            )}
           </div>
 
           <div className="hud-powerups stitched-panel" aria-label="Collected power-ups">

@@ -58,8 +58,14 @@ export async function createGameScene(engine: RenderEngine, canvas: HTMLCanvasEl
   camera.setTarget(new Vector3(1.2, -0.4, 0));
 
   const setOrthoBounds = () => {
-    const aspect = Math.max(0.5, canvas.clientWidth / Math.max(1, canvas.clientHeight));
-    const verticalSize = window.innerWidth < 760 ? 11.6 : 10.2;
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    const aspect = Math.max(0.44, width / height);
+    const narrowViewport = aspect < 0.92;
+    // Super Run needs a generous spectator frame: keep the hero, landing lane, and attack effects visible rather than zooming into a shoe on narrow screens.
+    const baselineVertical = narrowViewport ? 15.2 : width < 760 ? 13.4 : 11.8;
+    const minimumHorizontalSpan = narrowViewport ? 7.8 : 20.8;
+    const verticalSize = Math.max(baselineVertical, minimumHorizontalSpan / aspect);
     camera.orthoTop = verticalSize / 2;
     camera.orthoBottom = -verticalSize / 2;
     camera.orthoLeft = (-verticalSize * aspect) / 2;

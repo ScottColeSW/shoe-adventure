@@ -483,6 +483,25 @@ button:focus-visible {
 .boss-readout.boss-cleared { border-color: rgba(101, 221, 240, 0.64); background: linear-gradient(90deg, rgba(23, 111, 128, 0.64), rgba(15, 47, 69, 0.34)); }
 .boss-readout.boss-cleared span, .boss-readout.boss-cleared b { color: #dffeff; }
 
+/* The Super Run telemetry reads as a stitched field notebook: stage, current zone, then verified route coverage. */
+.super-run-stage {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.24rem 0.46rem;
+  align-items: center;
+  margin-top: 0.44rem;
+  padding: 0.34rem 0.4rem;
+  border: 1px dashed rgba(101, 221, 240, 0.62);
+  color: #dffeff;
+  background: linear-gradient(100deg, rgba(18, 86, 111, 0.5), rgba(15, 31, 64, 0.42));
+  font-size: 0.4rem;
+  letter-spacing: 0.09em;
+}
+
+.super-run-stage span { color: #ffcf63; font-weight: 700; }
+.super-run-stage b { min-width: 0; overflow: hidden; color: #fff0c9; font-size: 0.43rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.super-run-stage i { grid-column: 1 / -1; color: rgba(223, 254, 255, 0.78); font-size: 0.35rem; font-style: normal; letter-spacing: 0.08em; }
+
  .hud-powerups {
   top: 4.15rem;
   right: 1rem;

@@ -43,6 +43,23 @@
 - [x] Remove hero translucency and strengthen the hero silhouette, glow, and contrast across gameplay states.
 - [x] Add a Super Jump power-up and bonus-capture beat that visibly rewards the double-jump demonstration.
 - [x] Add staged weapon upgrades and mini-boss encounters to the Super Run route.
-- [ ] Add an Ultra Move and a Boss encounter that resolves before the rescue.
-- [ ] Extend the reunion win scene into a 5–7 second dancing celebration with readable replay timing.
-- [ ] Validate the full showcase sequence at desktop and mobile sizes without visual ambiguity.
+- [x] Add an Ultra Move and a Boss encounter that resolves before the rescue.
+- [x] Extend the reunion win scene into a 5–7 second dancing celebration with readable replay timing.
+- [x] Validate the full showcase sequence at desktop and mobile sizes without visual ambiguity.
+
+## Super Run Framing and Completion Regression
+
+- [x] Reproduce the oversized Super Run camera framing at desktop and mobile sizes.
+- [x] Identify the scripted state or terrain condition that can stop the Super Run before reunion.
+- [x] Constrain the Super Run camera to preserve readable stage composition and HUD scale.
+- [x] Verify a fresh Super Run reaches Boss defeat and the six-second pair-dance finale.
+- [ ] Save and deliver the corrected checkpoint.
+
+## Three-Stage Spectacular Super Run
+
+- [x] Map every existing enemy, power-up, device, and contraption to an explicit beat across three stages.
+- [x] Add durable AI route choreography with stage checkpoints, recovery lanes, and readable decision callouts.
+- [x] Showcase every shoe-form attack, movement upgrade, health pickup, and enemy-clear interaction during the run.
+- [x] Build Stage 3 around a mini-boss, health recovery, lightning Super Smash, and the Tangled Titan Boss kill.
+- [x] Make the reunion, celebration, and six-second dance follow the Boss finish without manual intervention.
+- [ ] Verify the full demo end-to-end at desktop and mobile sizes, then save and deliver the checkpoint.

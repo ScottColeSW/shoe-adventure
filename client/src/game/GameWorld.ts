@@ -159,6 +159,9 @@ export interface UiSnapshot {
   rescued: boolean;
   superRun: boolean;
   superRunAction: string;
+  superRunStage: number;
+  superRunStageLabel: string;
+  superRunCoverage: string;
   shoeForm: ShoeForm;
   laceLash: boolean;
   gumStomp: boolean;
@@ -211,6 +214,10 @@ export class GameWorld {
   private superRun = false;
   private superRunAction = "AI standing by.";
   private superRunKickTimer = 0;
+  private superRunPauseTimer = 0;
+  private superRunStage = 0;
+  private superRunStageLabel = "STANDBY";
+  private readonly superRunMilestones = new Set<string>();
   private bossDefeated = false;
   private reunionTimer = 0;
   private lastUiSignature = "";
@@ -775,6 +782,8 @@ export class GameWorld {
     this.pickups.push(this.createPickup("cowboy", 40.1, 0.95));
     this.pickups.push(this.createPickup("lash", 42.0, 0.75));
     this.pickups.push(this.createPickup("gum", 55.0, 2.95));
+    // A dedicated final-stage recovery pickup makes the Tower Break’s health-management decision visible in the spectator run.
+    this.pickups.push(this.createPickup("heart", 53.6, 1.6));
   }
 
   private createPickup(kind: PickupKind, x: number, y: number): Pickup {
@@ -1062,7 +1071,11 @@ export class GameWorld {
   private startSuperRun() {
     this.mode = "playing";
     this.superRun = true;
-    this.superRunAction = "AI ROUTE LOCKED — scanning the button trail.";
+    this.superRunStage = 1;
+    this.superRunStageLabel = "SHOEBOX SPRINT";
+    this.superRunMilestones.clear();
+    this.superRunPauseTimer = 0.8;
+    this.superRunAction = "STAGE 1/3 — SHOEBOX SPRINT. AI route locked; scanning the button trail.";
     this.activeCheckpoint = "Bedroom Threshold";
     this.buttons = 0;
     this.player.x = 0;
@@ -1262,8 +1275,11 @@ export class GameWorld {
 
   private tryUltraMove() {
     if (this.mode !== "playing" || !this.player.ultraMove || this.player.ultraCooldown > 0) return;
+    // The automated finale uses a wider, vertical-tolerant strike lane so a cinematic jump or recovery cannot leave the Boss unreachable.
+    const strikeRange = this.superRun ? 8.8 : 5.6;
+    const verticalRange = this.superRun ? 12 : 7.4;
     const boss = this.enemies.find((enemy) =>
-      enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < 5.6 && Math.abs(enemy.bottom - this.player.bottom) < 7.4,
+      enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < strikeRange && Math.abs(enemy.bottom - this.player.bottom) < verticalRange,
     );
     if (!boss) {
       this.message = "ULTRA MOVE is charged — bring The Tangled Titan into the stitched strike lane.";
@@ -1271,15 +1287,36 @@ export class GameWorld {
       return;
     }
     this.player.ultraCooldown = 1.5;
-    this.player.ultraTimer = 0.95;
+    this.player.ultraTimer = 1.08;
     this.player.invulnerable = Math.max(this.player.invulnerable, 1.15);
     this.player.vx = this.player.facing * 13.5;
+    this.spawnLightningSuperSmash(boss.x, boss.bottom + 0.72);
     this.spawnSparks(this.player.x + this.player.facing * 1.35, this.player.bottom + 0.82, VIOLET, 46, 5.5);
     this.defeatEnemy(boss);
     this.bossDefeated = true;
-    this.message = "ULTRA MOVE — PRISM SOLE BREAKER unravels The Tangled Titan!";
-    if (this.superRun) this.superRunAction = "ULTRA MOVE — Prismatic Sole Breaker opens Left Shoe’s tower.";
+    this.message = "LIGHTNING SUPER SMASH — Prismatic Sole Breaker unravels The Tangled Titan!";
+    if (this.superRun) this.superRunAction = "LIGHTNING SUPER SMASH — the AI discharges the Boss-kill finisher and opens Left Shoe’s tower.";
     this.publishUi(true);
+  }
+
+  private spawnLightningSuperSmash(x: number, y: number) {
+    // Three brief, jagged bolts create a readable lightning finisher without leaving persistent scene objects behind.
+    [-0.46, 0, 0.46].forEach((offset, index) => {
+      const bolt = MeshBuilder.CreateLines(`superSmashBolt-${this.titleTime}-${index}`, {
+        points: [
+          new Vector3(x + offset, y + 5.4, -0.78),
+          new Vector3(x - 0.22 + offset, y + 3.45, -0.78),
+          new Vector3(x + 0.24 + offset, y + 2.15, -0.78),
+          new Vector3(x - 0.34 + offset, y + 0.2, -0.78),
+        ],
+      }, this.scene);
+      bolt.color = index === 1 ? CREAM : CYAN;
+      bolt.alpha = 0.96;
+      bolt.isPickable = false;
+      this.sparks.push({ mesh: bolt, velocity: new Vector3(0, -0.25, 0), life: 0.36, maxLife: 0.36 });
+    });
+    this.spawnSparks(x, y + 0.55, CYAN, 30, 5.7);
+    this.spawnSparks(x, y + 0.42, GOLD, 20, 4.4);
   }
 
   private tryLaceLash() {
@@ -1438,29 +1475,91 @@ export class GameWorld {
 
   private updateSuperRun(delta: number) {
     this.superRunKickTimer = Math.max(0, this.superRunKickTimer - delta);
+    this.superRunPauseTimer = Math.max(0, this.superRunPauseTimer - delta);
     this.held.left = false;
-    this.held.right = this.player.x < 63.2;
+    this.held.right = this.player.x < 63.2 && this.superRunPauseTimer <= 0;
 
-    if (this.player.x >= 6.65) this.claimSuperRunPowerup("pump", "PUMP FORM — Heel Strike clears the starter pair.");
-    if (this.player.x >= 6.6) this.claimSuperRunPowerup("feather", "WINGTIP FLIGHT — double-jump unlocked.");
-    if (!this.player.grounded && !this.player.jumpUsed && this.player.doubleJumps > 0 && this.player.x >= 8.3 && this.player.x <= 10.6) {
-      this.tryJump();
-      this.superRunAction = "DOUBLE JUMP — Wingtip Feather carries Right Shoe to the Super Jump patch.";
+    // Spectator mode favors a graceful recovery over a failed run: restore the hero to the safe base lane if a transformation dash drops below the route.
+    if (this.player.bottom < -6.6) {
+      this.player.bottom = -4.2;
+      this.player.vy = 0;
+      this.player.vx = 6.4;
+      this.player.grounded = true;
+      this.player.invulnerable = Math.max(this.player.invulnerable, 1.25);
+      this.superRunAction = "AI RECOVERY — returning Right Shoe to the stitched finale lane.";
     }
-    if (this.player.x >= 11.7) this.claimSuperRunPowerup("superJump", "SUPER JUMP PATCH — spring-loaded soles armed.");
-    if (this.player.x >= 12.8) this.claimSuperRunPowerup("chrome", "CORAL CHROME — hero shine upgraded.");
-    if (this.player.superJump && this.player.x >= 15.0 && this.player.vy > 1.5) this.claimSuperRunPowerup("bonus", "BONUS CAPTURE — Super Jump snatched the Sky Stitch cache!");
-    if (this.player.x >= 16.0) this.claimSuperRunPowerup("hightop", "HIGHTOP FORM — Ankle Guard counters the elevated pair.");
-    if (this.player.x >= 18.8) this.claimSuperRunPowerup("dash", "LACE DASH — coral boost charged.");
-    if (this.player.x >= 26.15) this.claimSuperRunPowerup("loafer", "LOAFER FORM — Slip Slide sweeps the laundry ledge.");
-    if (this.player.x >= 30.0) this.claimSuperRunPowerup("moonstep", "MOONSTEP RUNNER — cobalt speed form unlocked.");
-    if (this.player.x >= 33.1) this.claimSuperRunPowerup("heart", "HEART SOLE — route integrity restored.");
-    if (this.player.x >= 39.75) this.claimSuperRunPowerup("cowboy", "COWBOY BOOT FORM — Spur Kick clears the bridge sentries.");
-    if (this.player.x >= 40.5) this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
-    if (this.player.x >= 45.8) this.claimSuperRunPowerup("moon", "MOON INSOLE — enemies slowed for the finale.");
-    if (this.player.x >= 46.75) this.claimSuperRunPowerup("sneaker", "SNEAKER FORM — Sprint Burst chains through the final pair.");
-    if (this.player.x >= 54.8) this.claimSuperRunPowerup("gum", "GUM STOMP — sticky sole impact armed.");
-    if (this.player.x >= 58.2) this.claimSuperRunPowerup("ultra", "ULTRA MOVE — Prismatic Sole Breaker locks onto The Tangled Titan.");
+
+    const x = this.player.x;
+    if (x >= 24.1) this.enterSuperRunStage(2, "LAUNDRY LABYRINTH", "Lace Bridge");
+    if (x >= 44.4) this.enterSuperRunStage(3, "ROGUE TOWER BREAK", "Moonlit Shoeboxes");
+
+    // STAGE 1 — collect every early patch, trigger the Button Ball Run, then use vertical mobility to reach the shoebox exit.
+    if (x >= 5.4 && this.markSuperRunMilestone("stage-1-button-trail", "STAGE 1/3 — button trail vacuumed; the Button Ball Run is primed.")) {
+      this.sweepSuperRunPickups(0, 6.9, "BUTTON TRAIL");
+    }
+    if (x >= 6.72 && this.markSuperRunMilestone("pump", "PUMP FORM — Heel Strike demolishes the starter pair.")) this.claimSuperRunPowerup("pump", "PUMP FORM — Heel Strike demolishes the starter pair.");
+    if (x >= 8.2 && this.markSuperRunMilestone("feather-one", "WINGTIP FLIGHT — the AI lines up a double-jump.")) this.claimSuperRunPowerup("feather", "WINGTIP FLIGHT — double-jump unlocked.");
+    if (!this.player.grounded && !this.player.jumpUsed && this.player.doubleJumps > 0 && x >= 8.7 && x <= 10.8 && this.markSuperRunMilestone("double-jump", "DOUBLE JUMP — Wingtip Feather clears the shoebox lip.")) this.tryJump();
+    if (x >= 10.15 && this.markSuperRunMilestone("button-run", "BUTTON BALL RUN — the AI releases the coral button down its rail.")) this.activateSuperRunContraption("buttonRun", "BUTTON BALL RUN — coral button released down the shoebox rail.");
+    if (x >= 11.72 && this.markSuperRunMilestone("super-jump", "SUPER JUMP PATCH — spring-loaded soles target the Sky Stitch cache.")) this.claimSuperRunPowerup("superJump", "SUPER JUMP PATCH — spring-loaded soles armed.");
+    if (x >= 12.72 && this.markSuperRunMilestone("coral-chrome", "CORAL CHROME — the hero shine upgrades for the long run.")) this.claimSuperRunPowerup("chrome", "CORAL CHROME — hero shine upgraded.");
+    if (x >= 14.8 && this.markSuperRunMilestone("bonus-cache", "SKY STITCH BONUS — an aerial cache awards an extra dash charge.")) this.claimSuperRunPowerup("bonus", "SKY STITCH BONUS — Super Jump snatches the aerial cache.");
+    if (x >= 16.02 && this.markSuperRunMilestone("hightop", "HIGHTOP FORM — Ankle Guard counters the elevated pair.")) this.claimSuperRunPowerup("hightop", "HIGHTOP FORM — Ankle Guard counters the elevated pair.");
+    if (x >= 18.82 && this.markSuperRunMilestone("dash-one", "LACE DASH — the AI bursts through the first long lane.")) this.claimSuperRunPowerup("dash", "LACE DASH — coral boost charged.");
+    if (x >= 19.35 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0 && this.markSuperRunMilestone("dash-demonstration", "LACE DASH — a high-speed route correction skips the laundry gap.")) this.tryDash();
+    if (x >= 23.5 && this.markSuperRunMilestone("stage-1-complete", "STAGE 1 CLEAR — all shoebox foes and patches are reconciled before the bridge.")) {
+      this.sweepSuperRunPickups(0, 24.3, "STAGE 1 PATCH SWEEP");
+      this.clearSuperRunEnemies(0, 24.3, "STAGE 1 ROUTE SWEEP");
+    }
+
+    // STAGE 2 — switch forms twice, restore health, and deliberately operate the Lace Lever.
+    if (x >= 26.1 && this.markSuperRunMilestone("loafer", "LOAFER FORM — Slip Slide sweeps the laundry ledge.")) this.claimSuperRunPowerup("loafer", "LOAFER FORM — Slip Slide sweeps the laundry ledge.");
+    if (x >= 29.95 && this.markSuperRunMilestone("moonstep", "MOONSTEP RUNNER — the cobalt traversal form handles the lace bridge.")) this.claimSuperRunPowerup("moonstep", "MOONSTEP RUNNER — cobalt speed form unlocked.");
+    if (x >= 31.0 && this.player.grounded && this.markSuperRunMilestone("moonstep-jump", "MOONSTEP LEAP — the AI keeps altitude above the lace bridge.")) this.tryJump();
+    if (x >= 33.0 && this.markSuperRunMilestone("heart-one", "HEART SOLE — route integrity is restored before the bridge guard.")) this.claimSuperRunPowerup("heart", "HEART SOLE — route integrity restored.");
+    if (x >= 35.2 && this.markSuperRunMilestone("stage-2-patch-sweep", "LAUNDRY LABYRINTH — the AI has recovered every bridge-side patch.")) this.sweepSuperRunPickups(24.3, 39.5, "STAGE 2 PATCH SWEEP");
+    if (x >= 36.4 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0 && this.markSuperRunMilestone("bridge-dash", "MOONSTEP + LACE DASH — the AI corrects across the bridge.")) this.tryDash();
+    if (x >= 39.72 && this.markSuperRunMilestone("cowboy", "COWBOY BOOT FORM — Spur Kick reaches across the bridge sentries.")) this.claimSuperRunPowerup("cowboy", "COWBOY BOOT FORM — Spur Kick clears the bridge sentries.");
+    if (x >= 41.72 && this.markSuperRunMilestone("lace-lash", "LACE LASH — the AI snaps the Lace Lever and topples its stitch dominoes.")) {
+      this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
+      this.player.lashCooldown = 0;
+      this.tryLaceLash();
+      this.activateSuperRunContraption("laceLever", "LACE LEVER — AI lash topples the dominoes and stitches the bridge tight.");
+    }
+    if (x >= 43.7 && this.markSuperRunMilestone("stage-2-complete", "STAGE 2 CLEAR — the bridge guard and every laundry-lane foe are resolved.")) {
+      this.sweepSuperRunPickups(24.3, 44.6, "STAGE 2 PATCH SWEEP");
+      this.clearSuperRunEnemies(24.3, 44.6, "STAGE 2 ROUTE SWEEP");
+    }
+
+    // STAGE 3 — a final recovery, Gum Press setup, mini-boss, lightning Super Smash, Boss kill, and tower reunion.
+    if (x >= 46.65 && this.markSuperRunMilestone("sneaker", "SNEAKER FORM — Sprint Burst chains through the Tower Break vanguard.")) this.claimSuperRunPowerup("sneaker", "SNEAKER FORM — Sprint Burst chains through the Tower Break vanguard.");
+    if (x >= 47.1 && this.markSuperRunMilestone("moon", "MOON INSOLE — the AI slows the tower vanguard for a clean final setup.")) this.claimSuperRunPowerup("moon", "MOON INSOLE — enemies slowed for the finale.");
+    if (x >= 50.2 && this.markSuperRunMilestone("stage-3-patch-sweep", "TOWER BREAK — every remaining route patch is indexed before the final gate.")) this.sweepSuperRunPickups(44.6, 53.3, "STAGE 3 PATCH SWEEP");
+    if (x >= 52.75 && this.markSuperRunMilestone("feather-two", "FINAL WINGTIP — a second double-jump token secures the high recovery line.")) this.claimSuperRunPowerup("feather", "FINAL WINGTIP — high lane secured.");
+    if (x >= 53.08 && this.markSuperRunMilestone("tower-risk-check", "RISK CHECK — the AI absorbs a controlled tower graze, preserving one heart for the recovery test.")) {
+      this.player.hearts = Math.max(1, this.player.hearts - 1);
+      this.player.invulnerable = Math.max(this.player.invulnerable, 0.6);
+      this.spawnSparks(this.player.x, this.player.bottom + 0.65, RESCUE_CORAL, 12, 2.6);
+    }
+    if (x >= 53.35 && this.markSuperRunMilestone("tower-heart", "HEALTH POWER-UP — the AI takes the Heart Sole before committing to the mini-boss.")) this.claimSuperRunPowerup("heart", "HEALTH POWER-UP — Heart Sole restores the Tower Break safety margin.");
+    if (x >= 54.72 && this.markSuperRunMilestone("gum-stomp", "GUM STOMP — the AI arms the sticky impact that powers the tower ramp.")) {
+      this.claimSuperRunPowerup("gum", "GUM STOMP — sticky sole impact armed.");
+      this.player.stompCooldown = 0;
+      this.tryGumStomp();
+      this.activateSuperRunContraption("gumPress", "GUM PRESS — AI Gum Stomp compresses the ramp for the tower approach.");
+    }
+    if (x >= 55.95 && this.markSuperRunMilestone("tower-mini-boss", "MINI-BOSS — Gum Marshal enters; the AI performs a measured Gum Stomp break.")) {
+      this.player.stompCooldown = 0;
+      this.tryGumStomp();
+      this.clearSuperRunEnemies(54.8, 57.9, "GUM MARSHAL MINI-BOSS BREAK");
+    }
+    if (x >= 57.2 && this.markSuperRunMilestone("spool-lift", "SPOOL LIFT — the AI winds the final rescue latch while the tower lane clears.")) this.activateSuperRunContraption("spoolLift", "SPOOL LIFT — thread winch raises the final rescue latch.");
+    if (x >= 58.05 && this.markSuperRunMilestone("dash-two", "FINAL LACE DASH — the AI enters the Boss finishing lane.")) this.claimSuperRunPowerup("dash", "FINAL LACE DASH — boost charged for the finish.");
+    if (x >= 58.22 && this.markSuperRunMilestone("ultra", "SUPER SMASH CORE — lightning finisher locks onto The Tangled Titan.")) this.claimSuperRunPowerup("ultra", "SUPER SMASH CORE — lightning finisher locks onto The Tangled Titan.");
+    if (x >= 58.32 && this.markSuperRunMilestone("final-coverage", "FINAL ROUTE AUDIT — every remaining patch and non-Boss enemy is resolved before the lightning finisher.")) {
+      this.sweepSuperRunPickups(53.3, WORLD_END + 1, "FINAL PATCH SWEEP");
+      this.clearSuperRunEnemies(44.6, 58.3, "TOWER VANGUARD SWEEP");
+    }
 
     const platformAhead = this.platforms.some(
       (platform) =>
@@ -1469,14 +1568,10 @@ export class GameWorld {
         platform.top > this.player.bottom + 0.18,
     );
     const showcaseBeat = [7.15, 13.3, 16.35, 21.1, 26.6, 35.1, 40.1, 42.0, 47.0, 51.1, 58.0].some((beat) => Math.abs(this.player.x - beat) < 0.16);
-    if (this.player.grounded && (platformAhead || showcaseBeat)) this.tryJump();
-    if (this.player.x > 19.4 && this.player.x < 25.6 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) {
-      this.superRunAction = "LACE DASH — cutting through the laundry lane.";
-      this.tryDash();
-    }
+    if (this.player.grounded && (platformAhead || showcaseBeat) && this.superRunPauseTimer <= 0) this.tryJump();
 
     const bossInUltraRange = this.enemies.find(
-      (enemy) => enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < 5.6,
+      (enemy) => enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < 8.8,
     );
     if (bossInUltraRange && this.player.ultraMove && this.player.ultraCooldown <= 0) this.tryUltraMove();
 
@@ -1487,13 +1582,13 @@ export class GameWorld {
       if (target.bossTier === "boss" && this.player.ultraMove && this.player.ultraCooldown <= 0) {
         this.tryUltraMove();
       } else if (target.bossTier === "boss") {
-        this.superRunAction = "BOSS GATE — the AI is lining up the Ultra Move core.";
-      } else if (target.bossTier === "mini" && this.player.laceLash && this.player.x < 49 && this.player.lashCooldown <= 0) {
-        this.tryLaceLash();
-        this.superRunAction = `MINI-BOSS: ${target.bossName} — Lace Lash breaks the skate guard.`;
-      } else if (target.bossTier === "mini" && this.player.gumStomp && this.player.stompCooldown <= 0) {
+        this.superRunAction = "BOSS GATE — the AI is lining up the lightning Super Smash core.";
+      } else if (target.bossTier === "mini" && target.bossName === "Gum Marshal" && this.player.gumStomp && this.player.stompCooldown <= 0) {
         this.tryGumStomp();
-        this.superRunAction = `MINI-BOSS: ${target.bossName} — Gum Stomp launches the final clearance.`;
+        this.superRunAction = "FINAL MINI-BOSS: Gum Marshal — Gum Stomp breaks the tower guard.";
+      } else if (target.bossTier === "mini" && this.player.laceLash && this.player.lashCooldown <= 0) {
+        this.tryLaceLash();
+        this.superRunAction = "MINI-BOSS: Lace Captain — Lace Lash breaks the skate guard.";
       } else if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) {
         this.tryGumStomp();
         this.superRunAction = "GUM STOMP — rogue footwear pinned by a sticky sole burst.";
@@ -1504,11 +1599,61 @@ export class GameWorld {
         this.performSuperKick(target);
       }
     }
+
     if (this.player.x > 60.1 && this.mode === "playing") this.superRunAction = "RESCUE PROTOCOL — crossing into Lefty’s tower.";
+    if (this.bossDefeated && this.player.x >= 58.6 && this.mode === "playing") {
+      this.player.x = Math.max(this.player.x, 60.8);
+      this.player.bottom = Math.max(this.player.bottom, -4.2);
+      this.player.vx = Math.max(this.player.vx, 6.4);
+      this.superRunAction = "RESCUE PROTOCOL — Boss down; completing the final stitch into the dance finale.";
+    }
+  }
+
+  private enterSuperRunStage(stage: number, label: string, checkpoint: string) {
+    if (this.superRunStage >= stage) return;
+    this.superRunStage = stage;
+    this.superRunStageLabel = label;
+    this.activeCheckpoint = checkpoint;
+    this.markSuperRunMilestone("stage-" + stage + "-entry", "STAGE " + stage + "/3 — " + label + ". The AI reassesses every device and foe in the new zone.", 0.78);
+  }
+
+  private markSuperRunMilestone(key: string, action: string, pause = 0.34) {
+    if (this.superRunMilestones.has(key)) return false;
+    this.superRunMilestones.add(key);
+    this.superRunAction = action;
+    this.message = "AI SUPER RUN: " + action;
+    this.superRunPauseTimer = Math.max(this.superRunPauseTimer, pause);
+    this.publishUi(true);
+    return true;
+  }
+
+  private activateSuperRunContraption(kind: ContraptionKind, callout: string) {
+    const contraption = this.contraptions.find((candidate) => candidate.kind === kind);
+    if (contraption && !contraption.activated) this.activateContraption(contraption, callout);
+  }
+
+  private sweepSuperRunPickups(minX: number, maxX: number, label: string) {
+    const pending = this.pickups.filter((pickup) => !pickup.collected && pickup.x >= minX && pickup.x < maxX);
+    pending.forEach((pickup) => this.collectPickup(pickup));
+    if (pending.length > 0) {
+      this.superRunAction = label + " — AI reconciled " + pending.length + " overlooked route patch" + (pending.length === 1 ? "" : "es") + ".";
+      this.message = "AI SUPER RUN: " + this.superRunAction;
+    }
+  }
+
+  private clearSuperRunEnemies(minX: number, maxX: number, label: string) {
+    const stragglers = this.enemies.filter((enemy) => enemy.alive && enemy.bossTier !== "boss" && enemy.x >= minX && enemy.x < maxX);
+    stragglers.forEach((enemy) => this.defeatEnemy(enemy));
+    if (stragglers.length > 0) {
+      this.superRunAction = label + " — AI closes " + stragglers.length + " remaining enemy record" + (stragglers.length === 1 ? "" : "s") + ".";
+      this.message = "AI SUPER RUN: " + this.superRunAction;
+    }
   }
 
   private claimSuperRunPowerup(kind: PickupKind, callout: string) {
-    const pickup = this.pickups.find((candidate) => candidate.kind === kind && !candidate.collected);
+    const pickup = this.pickups
+      .filter((candidate) => candidate.kind === kind && !candidate.collected)
+      .sort((left, right) => Math.abs(left.x - this.player.x) - Math.abs(right.x - this.player.x))[0];
     if (!pickup) return;
     this.collectPickup(pickup);
     const formPickup = kind === "pump" || kind === "hightop" || kind === "loafer" || kind === "cowboy" || kind === "sneaker";
@@ -1907,6 +2052,9 @@ export class GameWorld {
       rescued: this.mode === "won",
       superRun: this.superRun,
       superRunAction: this.superRunAction,
+      superRunStage: this.superRunStage,
+      superRunStageLabel: this.superRunStageLabel,
+      superRunCoverage: `${this.pickups.filter((pickup) => pickup.collected).length}/${this.pickups.length} power-ups · ${this.enemies.filter((enemy) => !enemy.alive).length}/${this.enemies.length} enemies`,
       shoeForm: this.player.shoeForm,
       laceLash: this.player.laceLash,
       gumStomp: this.player.gumStomp,
