@@ -62,9 +62,9 @@ export async function createGameScene(engine: RenderEngine, canvas: HTMLCanvasEl
     const height = Math.max(1, canvas.clientHeight);
     const aspect = Math.max(0.44, width / height);
     const narrowViewport = aspect < 0.92;
-    // Super Run needs a generous spectator frame: keep the hero, landing lane, and attack effects visible rather than zooming into a shoe on narrow screens.
-    const baselineVertical = narrowViewport ? 15.2 : width < 760 ? 13.4 : 11.8;
-    const minimumHorizontalSpan = narrowViewport ? 7.8 : 20.8;
+    // Super Run is a spectator sequence: show the hero, the next encounter, and the previous device rather than magnifying one shoe.
+    const baselineVertical = narrowViewport ? 21.6 : width < 760 ? 19.6 : 18.4;
+    const minimumHorizontalSpan = narrowViewport ? 13.2 : 35.6;
     const verticalSize = Math.max(baselineVertical, minimumHorizontalSpan / aspect);
     camera.orthoTop = verticalSize / 2;
     camera.orthoBottom = -verticalSize / 2;

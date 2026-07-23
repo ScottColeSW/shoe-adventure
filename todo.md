@@ -62,4 +62,12 @@
 - [x] Showcase every shoe-form attack, movement upgrade, health pickup, and enemy-clear interaction during the run.
 - [x] Build Stage 3 around a mini-boss, health recovery, lightning Super Smash, and the Tangled Titan Boss kill.
 - [x] Make the reunion, celebration, and six-second dance follow the Boss finish without manual intervention.
-- [ ] Verify the full demo end-to-end at desktop and mobile sizes, then save and deliver the checkpoint.
+- [x] Verify the full demo end-to-end at desktop and mobile sizes, then save and deliver the checkpoint.
+
+## Cinematic Super Run Readability Pass
+
+- [x] Audit the spectator camera, player motion, enemy movement, and existing attack-effect hooks.
+- [x] Widen and smooth the Super Run framing so stage context and action both stay visible.
+- [x] Add deliberate animated movement, attack anticipation, impacts, and recovery beats for the AI hero and enemies.
+- [x] Create readable cinematic pauses and effects for transformations, mini-boss encounters, Super Smash, and Boss defeat.
+- [x] Verify the revised long run at desktop and mobile sizes, then checkpoint and deliver.

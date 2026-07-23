@@ -112,6 +112,7 @@ interface Enemy {
   phase: number;
   bossTier?: "mini" | "boss";
   bossName?: string;
+  defeatTimer?: number;
 }
 
 interface Pickup {
@@ -145,6 +146,9 @@ interface Spark {
   velocity: Vector3;
   life: number;
   maxLife: number;
+  scaleRate?: number;
+  rotationRate?: number;
+  fade?: boolean;
 }
 
 export interface UiSnapshot {
@@ -215,6 +219,8 @@ export class GameWorld {
   private superRunAction = "AI standing by.";
   private superRunKickTimer = 0;
   private superRunPauseTimer = 0;
+  private cameraKickTimer = 0;
+  private cameraKickStrength = 0;
   private superRunStage = 0;
   private superRunStageLabel = "STANDBY";
   private readonly superRunMilestones = new Set<string>();
@@ -1114,8 +1120,13 @@ export class GameWorld {
       pickup.root.setEnabled(true);
     });
     this.enemies.forEach((enemy) => {
+      const baseScale = enemy.bossTier === "boss" ? 1.72 : enemy.bossTier === "mini" ? 1.24 : 1;
       enemy.alive = true;
+      enemy.defeatTimer = 0;
       enemy.x = enemy.minX + 0.35;
+      enemy.root.position = new Vector3(enemy.x, enemy.bottom, -0.3);
+      enemy.root.rotation.z = 0;
+      enemy.root.scaling = new Vector3(baseScale, baseScale, baseScale);
       enemy.root.setEnabled(true);
     });
     this.checkpoints.forEach((checkpoint) => { checkpoint.activated = false; });
@@ -1163,12 +1174,14 @@ export class GameWorld {
   private tryDash() {
     if (this.mode !== "playing" || this.player.dashCharges <= 0 || this.player.dashCooldown > 0) return;
     this.player.dashCharges -= 1;
-    this.player.dashTimer = 0.26;
+    this.player.dashTimer = this.superRun ? 0.42 : 0.26;
     this.player.dashCooldown = 0.18;
     this.player.invulnerable = 0.28;
     this.player.vx = this.player.facing * 20;
+    this.triggerCinematicBeat(0.12, 0.06);
     this.message = "Lace Dash burns a coral trail.";
     this.spawnSparks(this.player.x - this.player.facing * 0.42, this.player.bottom + 0.62, RESCUE_CORAL, 14, 3.4);
+    this.spawnImpactRing(this.player.x, this.player.bottom + 0.62, RESCUE_CORAL, 0.52);
     this.publishUi(true);
   }
 
@@ -1225,8 +1238,8 @@ export class GameWorld {
     const attack = this.shoeFormAttackLabel(form);
     if (this.mode !== "playing" || !attack || this.player.formAttackCooldown > 0) return;
 
-    this.player.formAttackCooldown = form === "hightop" ? 1.25 : 0.8;
-    this.player.formAttackTimer = form === "hightop" ? 0.62 : 0.46;
+    this.player.formAttackCooldown = form === "hightop" ? 1.45 : 1.05;
+    this.player.formAttackTimer = form === "hightop" ? 0.96 : this.superRun ? 0.76 : 0.52;
     this.player.invulnerable = Math.max(this.player.invulnerable, form === "hightop" ? 1.45 : 0.42);
 
     const near = (range: number, forward = false) => this.enemies.filter((enemy) =>
@@ -1238,34 +1251,46 @@ export class GameWorld {
     if (form === "pump") {
       targets = near(2.75).filter((enemy) => !enemy.bossTier);
       color = RESCUE_CORAL;
-      if (this.player.grounded) this.player.vy = 4.9;
+      if (this.player.grounded)       this.player.vy = 4.9;
+      this.triggerCinematicBeat(0.2, 0.1);
       this.spawnSparks(this.player.x, this.player.bottom + 0.28, color, 28, 4.4);
+      this.spawnImpactRing(this.player.x, this.player.bottom + 0.3, color, 0.92);
+
     }
     if (form === "hightop") {
       this.player.formShieldTimer = 1.45;
       targets = near(1.65).filter((enemy) => !enemy.bossTier);
       color = CYAN;
+      this.triggerCinematicBeat(0.18, 0.08);
       this.spawnSparks(this.player.x, this.player.bottom + 0.78, color, 22, 3.1);
+      this.spawnImpactRing(this.player.x, this.player.bottom + 0.78, color, 1.08);
     }
     if (form === "loafer") {
       targets = near(3.45, true).filter((enemy) => !enemy.bossTier);
       color = MOSS;
       this.player.vx = this.player.facing * 16.5;
+      this.triggerCinematicBeat(0.14, 0.07);
       this.spawnSparks(this.player.x - this.player.facing * 0.35, this.player.bottom + 0.48, color, 20, 3.8);
+      this.spawnImpactRing(this.player.x + this.player.facing * 0.5, this.player.bottom + 0.48, color, 0.78);
     }
     if (form === "cowboy") {
       targets = near(5.15, true).filter((enemy) => !enemy.bossTier);
       color = GOLD;
       this.player.vx = this.player.facing * 8.4;
+      this.triggerCinematicBeat(0.22, 0.1);
       this.spawnSparks(this.player.x + this.player.facing * 1.55, this.player.bottom + 0.78, color, 24, 4.6);
+      this.spawnImpactRing(this.player.x + this.player.facing * 1.35, this.player.bottom + 0.78, color, 1.04);
     }
     if (form === "sneaker") {
       targets = near(4.9, true).filter((enemy) => enemy.bossTier !== "mini" && enemy.bossTier !== "boss");
       color = VIOLET;
       this.player.vx = this.player.facing * 21;
+      this.triggerCinematicBeat(0.18, 0.08);
       this.spawnSparks(this.player.x - this.player.facing * 0.44, this.player.bottom + 0.62, color, 26, 4.8);
+      this.spawnImpactRing(this.player.x + this.player.facing * 0.65, this.player.bottom + 0.62, color, 0.86);
     }
 
+    if (this.superRun) this.superRunPauseTimer = Math.max(this.superRunPauseTimer, form === "hightop" ? 0.86 : 0.68);
     targets.forEach((enemy) => this.defeatEnemy(enemy));
     const suffix = targets.length > 0 ? `clears ${targets.length} shoe fiend${targets.length === 1 ? "" : "s"}.` : "charges the route ahead.";
     this.message = `${attack} — ${suffix}`;
@@ -1287,9 +1312,11 @@ export class GameWorld {
       return;
     }
     this.player.ultraCooldown = 1.5;
-    this.player.ultraTimer = 1.08;
+    this.player.ultraTimer = this.superRun ? 1.42 : 1.08;
     this.player.invulnerable = Math.max(this.player.invulnerable, 1.15);
     this.player.vx = this.player.facing * 13.5;
+    if (this.superRun) this.superRunPauseTimer = Math.max(this.superRunPauseTimer, 1.05);
+    this.triggerCinematicBeat(0.36, 0.2);
     this.spawnLightningSuperSmash(boss.x, boss.bottom + 0.72);
     this.spawnSparks(this.player.x + this.player.facing * 1.35, this.player.bottom + 0.82, VIOLET, 46, 5.5);
     this.defeatEnemy(boss);
@@ -1322,12 +1349,14 @@ export class GameWorld {
   private tryLaceLash() {
     if (this.mode !== "playing" || !this.player.laceLash || this.player.lashCooldown > 0) return;
     this.player.lashCooldown = 0.72;
-    this.player.lashTimer = 0.34;
+    this.player.lashTimer = this.superRun ? 0.58 : 0.34;
     this.player.invulnerable = Math.max(this.player.invulnerable, 0.32);
     const targets = this.enemies.filter((enemy) =>
       enemy.alive && (enemy.x - this.player.x) * this.player.facing > -0.35 && (enemy.x - this.player.x) * this.player.facing < 3.45 && Math.abs(enemy.bottom - this.player.bottom) < 2.1,
     );
+    this.triggerCinematicBeat(0.18, 0.08);
     this.spawnSparks(this.player.x + this.player.facing * 1.15, this.player.bottom + 0.72, CREAM, 16, 3.8);
+    this.spawnImpactRing(this.player.x + this.player.facing * 1.05, this.player.bottom + 0.72, CREAM, 0.72);
     targets.forEach((enemy) => this.defeatEnemy(enemy));
     this.message = targets.length > 0 ? "Lace Lash snaps the shoe fiends off the route." : "Lace Lash cracks across the stitched air.";
     this.publishUi(true);
@@ -1336,11 +1365,13 @@ export class GameWorld {
   private tryGumStomp() {
     if (this.mode !== "playing" || !this.player.gumStomp || this.player.stompCooldown > 0) return;
     this.player.stompCooldown = 1.25;
-    this.player.stompTimer = 0.42;
+    this.player.stompTimer = this.superRun ? 0.66 : 0.42;
     this.player.invulnerable = Math.max(this.player.invulnerable, 0.48);
     if (this.player.grounded) this.player.vy = 4.2;
     const targets = this.enemies.filter((enemy) => enemy.alive && Math.abs(enemy.x - this.player.x) < 2.45 && Math.abs(enemy.bottom - this.player.bottom) < 2.35);
+    this.triggerCinematicBeat(0.2, 0.09);
     this.spawnSparks(this.player.x, this.player.bottom + 0.34, MOSS, 22, 4.1);
+    this.spawnImpactRing(this.player.x, this.player.bottom + 0.28, MOSS, 0.96);
     targets.forEach((enemy) => this.defeatEnemy(enemy));
     this.message = targets.length > 0 ? "Gum Stomp sticks the shoe fiends in place — then bounces clear!" : "Gum Stomp lands with a bright sticky bounce.";
     this.publishUi(true);
@@ -1478,6 +1509,9 @@ export class GameWorld {
     this.superRunPauseTimer = Math.max(0, this.superRunPauseTimer - delta);
     this.held.left = false;
     this.held.right = this.player.x < 63.2 && this.superRunPauseTimer <= 0;
+    if (this.superRunPauseTimer > 0 && this.player.dashTimer <= 0 && this.player.formAttackTimer <= 0 && this.player.ultraTimer <= 0) {
+      this.player.vx *= Math.max(0.22, 1 - delta * 8.5);
+    }
 
     // Spectator mode favors a graceful recovery over a failed run: restore the hero to the safe base lane if a transformation dash drops below the route.
     if (this.player.bottom < -6.6) {
@@ -1488,6 +1522,9 @@ export class GameWorld {
       this.player.invulnerable = Math.max(this.player.invulnerable, 1.25);
       this.superRunAction = "AI RECOVERY — returning Right Shoe to the stitched finale lane.";
     }
+
+    // Let every pickup, attack, and device read on screen before the autonomous script evaluates its next beat.
+    if (this.superRunPauseTimer > 0) return;
 
     const x = this.player.x;
     if (x >= 24.1) this.enterSuperRunStage(2, "LAUNDRY LABYRINTH", "Lace Bridge");
@@ -1617,7 +1654,7 @@ export class GameWorld {
     this.markSuperRunMilestone("stage-" + stage + "-entry", "STAGE " + stage + "/3 — " + label + ". The AI reassesses every device and foe in the new zone.", 0.78);
   }
 
-  private markSuperRunMilestone(key: string, action: string, pause = 0.34) {
+  private markSuperRunMilestone(key: string, action: string, pause = 0.58) {
     if (this.superRunMilestones.has(key)) return false;
     this.superRunMilestones.add(key);
     this.superRunAction = action;
@@ -1657,6 +1694,8 @@ export class GameWorld {
     if (!pickup) return;
     this.collectPickup(pickup);
     const formPickup = kind === "pump" || kind === "hightop" || kind === "loafer" || kind === "cowboy" || kind === "sneaker";
+    const showcasePause = kind === "ultra" ? 1.25 : formPickup ? 0.92 : kind === "heart" || kind === "lash" || kind === "gum" ? 0.64 : 0.42;
+    this.superRunPauseTimer = Math.max(this.superRunPauseTimer, showcasePause);
     this.superRunAction = formPickup ? `${callout} Attack fires on pickup.` : callout;
     this.message = `AI SUPER RUN: ${this.superRunAction}`;
   }
@@ -1665,12 +1704,15 @@ export class GameWorld {
     if (!enemy.alive || enemy.bossTier === "boss") return;
     const move = enemy.bossTier === "mini" ? "MINI-BOSS HEEL BREAK" : enemy.kind === "skate" ? "TURBO HEEL KICK" : enemy.kind === "slime" ? "CRESCENT SOLE KICK" : "SOLE-FLIP KICK";
     if (enemy.kind === "skate" && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
-    this.superRunKickTimer = 0.52;
+    this.superRunKickTimer = 0.72;
+    if (this.superRun) this.superRunPauseTimer = Math.max(this.superRunPauseTimer, enemy.bossTier === "mini" ? 0.82 : 0.58);
     this.defeatEnemy(enemy);
     this.player.vy = Math.max(this.player.vy, 7.4);
     this.superRunAction = `${move} — ${enemy.kind === "skate" ? "rogue skate grounded." : "shoe fiend cleared."}`;
     this.message = `AI SUPER RUN: ${this.superRunAction}`;
+    this.triggerCinematicBeat(enemy.bossTier === "mini" ? 0.3 : 0.16, enemy.bossTier === "mini" ? 0.14 : 0.07);
     this.spawnSparks(enemy.x, enemy.bottom + 0.78, RESCUE_CORAL, 12, 3.8);
+    this.spawnImpactRing(enemy.x, enemy.bottom + 0.78, RESCUE_CORAL, enemy.bossTier === "mini" ? 1.18 : 0.78);
   }
 
   private updatePlayer(delta: number) {
@@ -1719,11 +1761,24 @@ export class GameWorld {
 
     if (this.player.bottom < -8) this.damagePlayer("The laundry chute tossed Right Shoe back.");
 
-    const bob = this.player.grounded ? Math.abs(this.player.vx) * Math.sin(this.titleTime * 20) * 0.008 : 0;
+    const speedRatio = Math.min(1, Math.abs(this.player.vx) / 21);
+    const stridePhase = this.titleTime * (8 + speedRatio * 12);
+    const bob = this.player.grounded ? Math.sin(stridePhase) * (0.035 + speedRatio * 0.07) : 0;
+    const airbornePose = this.player.grounded ? 0 : Math.max(-0.12, Math.min(0.18, this.player.vy * 0.022));
     this.player.root.position.x = this.player.x;
     this.player.root.position.y = this.player.bottom + bob;
     this.player.root.scaling.x = this.player.facing;
-    this.player.root.rotation.z = Math.max(-0.18, Math.min(0.18, -this.player.vx * 0.016));
+    this.player.root.rotation.z = Math.max(-0.22, Math.min(0.22, -this.player.vx * 0.019)) + airbornePose;
+    if (this.heroSprite) {
+      const attackPose = this.player.ultraTimer > 0 ? 0.2 : this.player.formAttackTimer > 0 ? 0.13 : this.superRunKickTimer > 0 ? 0.18 : 0;
+      const squash = this.player.grounded ? Math.sin(stridePhase) * speedRatio * 0.08 : -0.06;
+      this.heroSprite.position.x = 0.06 + this.player.facing * attackPose;
+      this.heroSprite.position.y = 0.9 + bob * 0.72 + Math.max(0, airbornePose) * 0.35;
+      this.heroSprite.rotation.z = -this.player.facing * (attackPose * 0.92 + squash * 0.42);
+      const spectatorScale = this.superRun ? 0.86 : 1;
+      this.heroSprite.scaling.x = spectatorScale * (1 + Math.abs(squash) + attackPose * 0.45);
+      this.heroSprite.scaling.y = spectatorScale * (1 - squash + attackPose * 0.15);
+    }
     if (this.superRunKickTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.62;
     if (this.player.ultraTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.76;
     if (this.player.formAttackTimer > 0) this.player.root.rotation.z = this.player.shoeForm === "pump" ? this.player.facing * 0.38 : -this.player.facing * 0.48;
@@ -1731,7 +1786,8 @@ export class GameWorld {
     if (this.player.stompTimer > 0) this.player.root.rotation.z = this.player.facing * 0.16;
     if (this.player.superJumpTimer > 0) this.player.root.rotation.z = -this.player.facing * 0.2;
     if (this.heroHalo) {
-      const pulse = 1 + Math.sin(this.titleTime * 7.4) * 0.06 + (this.player.shoeForm === "starter" ? 0 : 0.07);
+      const actionPulse = this.player.ultraTimer > 0 ? 0.48 : this.player.formAttackTimer > 0 || this.superRunKickTimer > 0 ? 0.24 : 0;
+      const pulse = 1 + Math.sin(this.titleTime * 7.4) * 0.06 + (this.player.shoeForm === "starter" ? 0 : 0.07) + actionPulse;
       this.heroHalo.scaling = new Vector3(pulse, pulse, 1);
     }
     if (this.player.dashTimer > 0) {
@@ -1754,18 +1810,36 @@ export class GameWorld {
 
   private updateEnemies(delta: number) {
     const slowFactor = this.player.moonTimer > 0 ? 0.36 : 1;
+    const cinematicSlow = this.superRun && this.superRunPauseTimer > 0 ? 0.12 : 1;
     for (const enemy of this.enemies) {
-      if (!enemy.alive) continue;
-      enemy.x += enemy.speed * slowFactor * delta;
+      if (!enemy.alive) {
+        if (enemy.defeatTimer && enemy.defeatTimer > 0) {
+          enemy.defeatTimer = Math.max(0, enemy.defeatTimer - delta);
+          const fall = 1 - enemy.defeatTimer / (enemy.bossTier === "boss" ? 1.25 : enemy.bossTier === "mini" ? 0.92 : 0.58);
+          enemy.root.position.y = enemy.bottom + fall * 0.72;
+          enemy.root.rotation.z += (enemy.speed >= 0 ? 1 : -1) * delta * (enemy.bossTier ? 7.6 : 10.8);
+          const shrink = Math.max(0.22, 1 - fall * (enemy.bossTier ? 0.22 : 0.48));
+          enemy.root.scaling.y = (enemy.bossTier === "boss" ? 1.72 : enemy.bossTier === "mini" ? 1.24 : 1) * shrink;
+          enemy.root.scaling.z = (enemy.bossTier === "boss" ? 1.72 : enemy.bossTier === "mini" ? 1.24 : 1) * shrink;
+          if (enemy.defeatTimer <= 0) enemy.root.setEnabled(false);
+        }
+        continue;
+      }
+      enemy.x += enemy.speed * slowFactor * cinematicSlow * delta;
       if (enemy.x < enemy.minX || enemy.x > enemy.maxX) {
         enemy.x = Math.max(enemy.minX, Math.min(enemy.maxX, enemy.x));
         enemy.speed *= -1;
       }
-      const hover = enemy.kind === "skate" ? Math.sin(this.titleTime * 3.1 + enemy.phase) * 0.16 : 0;
+      const baseScale = enemy.bossTier === "boss" ? 1.72 : enemy.bossTier === "mini" ? 1.24 : 1;
+      const gait = Math.sin(this.titleTime * (enemy.bossTier ? 3.2 : 6.2) + enemy.phase);
+      const hover = enemy.kind === "skate" ? Math.sin(this.titleTime * 3.1 + enemy.phase) * 0.16 : gait * (enemy.bossTier ? 0.045 : 0.075);
+      const squash = enemy.kind === "slime" ? gait * 0.12 : gait * 0.035;
       enemy.root.position.x = enemy.x;
       enemy.root.position.y = enemy.bottom + hover;
-      enemy.root.rotation.z = Math.sin(this.titleTime * 4 + enemy.phase) * (enemy.kind === "slime" ? 0.07 : 0.025);
-      enemy.root.scaling.x = enemy.speed < 0 ? -1 : 1;
+      enemy.root.rotation.z = gait * (enemy.kind === "slime" ? 0.12 : enemy.bossTier ? 0.045 : 0.065);
+      enemy.root.scaling.x = (enemy.speed < 0 ? -1 : 1) * baseScale * (1 + squash * 0.35);
+      enemy.root.scaling.y = baseScale * (1 - squash);
+      enemy.root.scaling.z = baseScale * (1 + squash * 0.28);
 
       const horizontal = Math.abs(this.player.x - enemy.x) < (PLAYER_WIDTH + enemy.width) / 2;
       const playerTop = this.player.bottom + PLAYER_HEIGHT;
@@ -1813,9 +1887,16 @@ export class GameWorld {
       spark.life -= delta;
       spark.mesh.position.addInPlace(spark.velocity.scale(delta));
       spark.velocity.y -= 4.5 * delta;
-      spark.mesh.scaling.scaleInPlace(0.98);
+      spark.mesh.scaling.scaleInPlace(spark.scaleRate ? 1 + spark.scaleRate * delta : 0.98);
+      if (spark.rotationRate) spark.mesh.rotation.z += spark.rotationRate * delta;
+      if (spark.fade) {
+        const material = spark.mesh.material as StandardMaterial | null;
+        if (material) material.alpha = Math.max(0, spark.life / spark.maxLife);
+      }
       if (spark.life <= 0) {
+        const material = spark.mesh.material as StandardMaterial | null;
         spark.mesh.dispose();
+        material?.dispose();
         this.sparks.splice(index, 1);
       }
     }
@@ -1825,27 +1906,60 @@ export class GameWorld {
     if (this.mode === "won" && this.reunionTimer > 0) {
       const before = Math.ceil(this.reunionTimer);
       this.reunionTimer = Math.max(0, this.reunionTimer - delta);
-      if (before !== Math.ceil(this.reunionTimer)) this.publishUi(false);
+      const danceBeat = Math.sin(this.titleTime * 7.2);
+      this.player.root.position.y = this.player.bottom + 0.12 + Math.abs(danceBeat) * 0.28;
+      this.player.root.rotation.z = danceBeat * 0.22;
+      if (this.heroSprite) this.heroSprite.rotation.z = danceBeat * 0.16;
+      if (before !== Math.ceil(this.reunionTimer)) {
+        this.spawnSparks(this.player.x + 0.8, this.player.bottom + 1.1, RESCUE_CORAL, 9, 2.4);
+        this.publishUi(false);
+      }
     }
     this.parallax.forEach((mesh, index) => {
       mesh.position.x += Math.sin(this.titleTime * 0.23 + index) * 0.0007;
     });
     if (this.leftShoe) {
-      this.leftShoe.position.y = 3.95 + Math.sin(this.titleTime * 2.1) * 0.07;
-      this.leftShoe.rotation.z = Math.sin(this.titleTime * 1.8) * 0.035;
+      const leftDance = this.mode === "won" ? Math.sin(this.titleTime * 7.2 + Math.PI) : Math.sin(this.titleTime * 2.1) * 0.48;
+      this.leftShoe.position.y = 3.95 + (this.mode === "won" ? Math.abs(leftDance) * 0.26 : leftDance * 0.15);
+      this.leftShoe.rotation.z = leftDance * (this.mode === "won" ? 0.16 : 0.035);
     }
     if (this.leftShoeHalo) this.leftShoeHalo.rotation.z += 0.006;
   }
 
   private updateCamera(delta: number) {
-    const targetX = Math.max(0, Math.min(52, this.player.x - 1.8));
-    this.camera.position.x += (targetX - this.camera.position.x) * Math.min(1, 4.2 * delta);
-    this.camera.setTarget(new Vector3(this.camera.position.x + 1.2, -0.4, 0));
+    const spectator = this.superRun;
+    const targetX = Math.max(0, Math.min(50, this.player.x - (spectator ? 5.2 : 1.8)));
+    this.camera.position.x += (targetX - this.camera.position.x) * Math.min(1, (spectator ? 2.35 : 4.2) * delta);
+    this.cameraKickTimer = Math.max(0, this.cameraKickTimer - delta);
+    const kick = this.cameraKickTimer > 0 ? Math.sin(this.titleTime * 44) * this.cameraKickStrength * (this.cameraKickTimer / 0.36) : 0;
+    if (this.cameraKickTimer <= 0) this.cameraKickStrength = 0;
+    this.camera.position.y = -0.55 + kick * 0.32;
+    this.camera.setTarget(new Vector3(this.camera.position.x + (spectator ? 4.6 : 1.2), -0.4 + kick * 0.1, 0));
+  }
+
+  private triggerCinematicBeat(duration: number, strength: number) {
+    this.cameraKickTimer = Math.max(this.cameraKickTimer, duration);
+    this.cameraKickStrength = Math.max(this.cameraKickStrength, strength);
+    if (this.superRun) this.superRunPauseTimer = Math.max(this.superRunPauseTimer, Math.min(0.58, duration * 1.45));
+  }
+
+  private spawnImpactRing(x: number, y: number, color: Color3, radius: number) {
+    const ring = MeshBuilder.CreateTorus(`impactRing-${this.titleTime}-${x}`, { diameter: radius * 2, thickness: Math.max(0.07, radius * 0.12), tessellation: 28 }, this.scene);
+    ring.position = new Vector3(x, y, -0.78);
+    ring.rotation.x = Math.PI / 2;
+    const material = this.createMaterial(`impactRingMat-${this.titleTime}-${x}`, color, color.scale(0.65));
+    material.alpha = 0.88;
+    material.backFaceCulling = false;
+    ring.material = material;
+    ring.isPickable = false;
+    this.sparks.push({ mesh: ring, velocity: new Vector3(0, 0.34, 0), life: 0.44, maxLife: 0.44, scaleRate: 2.8, rotationRate: 3.6, fade: true });
   }
 
   private defeatEnemy(enemy: Enemy) {
+    if (!enemy.alive) return;
     enemy.alive = false;
-    enemy.root.setEnabled(false);
+    enemy.defeatTimer = enemy.bossTier === "boss" ? 1.25 : enemy.bossTier === "mini" ? 0.92 : 0.58;
+    this.triggerCinematicBeat(enemy.bossTier === "boss" ? 0.36 : enemy.bossTier === "mini" ? 0.24 : 0.1, enemy.bossTier === "boss" ? 0.2 : 0.09);
     this.player.vy = 6.1;
     if (enemy.bossTier === "boss") this.bossDefeated = true;
     this.buttons += enemy.bossTier === "boss" ? 20 : enemy.bossTier === "mini" ? 8 : 4;
@@ -1856,6 +1970,7 @@ export class GameWorld {
         : "Sole stomp! A rescue spark lights the way.";
     const burst = enemy.bossTier === "boss" ? VIOLET : enemy.bossTier === "mini" ? RESCUE_CORAL : GOLD;
     this.spawnSparks(enemy.x, enemy.bottom + 0.6, burst, enemy.bossTier === "boss" ? 46 : enemy.bossTier === "mini" ? 28 : 16, enemy.bossTier === "boss" ? 5.4 : enemy.bossTier === "mini" ? 4.2 : 3.1);
+    this.spawnImpactRing(enemy.x, enemy.bottom + 0.7, burst, enemy.bossTier === "boss" ? 1.5 : enemy.bossTier === "mini" ? 1.14 : 0.72);
     this.publishUi(true);
   }
 
