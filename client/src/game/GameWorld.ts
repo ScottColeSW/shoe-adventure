@@ -186,6 +186,10 @@ export interface UiSnapshot {
   superRunStage: number;
   superRunStageLabel: string;
   superRunCoverage: string;
+  /** Set only during an actual agent-driven run (?agent=...) so the HUD can show a
+   * distinct chip from the scripted Super Run, which shares the same ribbon otherwise. */
+  agentBackend?: string;
+  agentModel?: string;
   shoeForm: ShoeForm;
   laceLash: boolean;
   gumStomp: boolean;
@@ -235,9 +239,12 @@ export class GameWorld {
   private readonly isDemo: boolean;
   private readonly isSuperRunPreview: boolean;
   private readonly isReunionPreview: boolean;
-  private readonly isAgentRun: boolean;
-  private readonly agentBackend: "ollama" | "llamacpp" | "hosted";
-  private readonly agentModel: string;
+  /** Not readonly: ?agent=... sets these once at construction, but the
+   * title screen's Agent Run picker (see onStartAgent) can also set them
+   * later, right before a run actually starts. */
+  private isAgentRun: boolean;
+  private agentBackend: "ollama" | "llamacpp" | "hosted";
+  private agentModel: string;
   private readonly agentRunId: string;
   private agentDecisionPending = false;
   private readonly agentAskedEnemies = new Set<Enemy>();
@@ -281,6 +288,11 @@ export class GameWorld {
   private onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
   private onKeyUpBound = (event: KeyboardEvent) => this.onKeyUp(event);
   private onCommandBound = (event: Event) => this.onCommand(event as CustomEvent<GameCommand>);
+  /** Separate from the plain-string command bus above because this one
+   * carries a payload (which model to drive the run) rather than just a
+   * command name -- see GameCanvas.tsx's Agent Run picker. */
+  private onStartAgentBound = (event: Event) =>
+    this.onStartAgent(event as CustomEvent<{ backend: "ollama"; model: string }>);
 
   constructor(scene: Scene, canvas: HTMLCanvasElement, camera: FreeCamera, glow: GlowLayer) {
     this.scene = scene;
@@ -319,6 +331,7 @@ export class GameWorld {
     window.removeEventListener("keydown", this.onKeyDownBound);
     window.removeEventListener("keyup", this.onKeyUpBound);
     window.removeEventListener("shoe-adventure:command", this.onCommandBound);
+    window.removeEventListener("shoe-adventure:startAgent", this.onStartAgentBound);
     this.audio.stopMusic();
     this.sparks.forEach((spark) => spark.mesh.dispose());
   }
@@ -1157,6 +1170,7 @@ export class GameWorld {
     window.addEventListener("keydown", this.onKeyDownBound, { passive: false });
     window.addEventListener("keyup", this.onKeyUpBound, { passive: false });
     window.addEventListener("shoe-adventure:command", this.onCommandBound);
+    window.addEventListener("shoe-adventure:startAgent", this.onStartAgentBound);
   }
 
   private onKeyDown(event: KeyboardEvent) {
@@ -1317,6 +1331,22 @@ export class GameWorld {
    * differs (see updateAgentRun). Kept as its own method rather than a
    * flag on startSuperRun so the two entry points stay easy to read
    * independently as the agent-run feature grows more decision points. */
+  /** Fired by the title screen's Agent Run picker (GameCanvas.tsx), once a
+   * player has chosen an installed model there -- see catalog.ts and its
+   * GET /api/agent/catalog. Title-screen-only, same restriction Dominion's
+   * own pre-show picker uses, since choosing a model mid-run makes no
+   * sense: the backend/model a run reports (see publishUi's agentBackend/
+   * agentModel fields) is meant to describe the run that's actually live. */
+  private onStartAgent(event: CustomEvent<{ backend: "ollama"; model: string }>) {
+    if (this.mode !== "title") return;
+    const { backend, model } = event.detail;
+    if (!model) return;
+    this.agentBackend = backend;
+    this.agentModel = model;
+    this.isAgentRun = true;
+    this.startAgentRun();
+  }
+
   private startAgentRun() {
     this.startSuperRun();
     this.agentAskedEnemies.clear();
@@ -2746,6 +2776,8 @@ export class GameWorld {
       superRunStage: this.superRunStage,
       superRunStageLabel: this.superRunStageLabel,
       superRunCoverage: `${this.pickups.filter((pickup) => pickup.collected).length}/${this.pickups.length} power-ups · ${this.enemies.filter((enemy) => !enemy.alive).length}/${this.enemies.length} enemies`,
+      agentBackend: this.isAgentRun ? this.agentBackend : undefined,
+      agentModel: this.isAgentRun ? this.agentModel : undefined,
       shoeForm: this.player.shoeForm,
       laceLash: this.player.laceLash,
       gumStomp: this.player.gumStomp,

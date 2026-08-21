@@ -64,6 +64,39 @@ interface LeaderboardEntry {
   seconds: number;
 }
 
+/** Mirrors server/agent/catalog.ts's response shape -- see that file's own
+ * docstring for how this maps to Dominion's model_catalog.py. */
+interface ModelCatalog {
+  reachable: boolean;
+  models: { name: string; sizeBytes: number }[];
+  systemMemory: { totalBytes: number; availableBytes: number };
+}
+
+// Same conservative worst-case margin Dominion's own picker uses (see that
+// project's index.html): budget against 80% of available memory, not all
+// of it, since the OS and everything else running need headroom too.
+const MODEL_PICKER_BUDGET_FRACTION = 0.8;
+// How often the title screen re-checks Ollama while the picker could be
+// open -- cheap enough (a 3s-capped /api/tags call server-side) to poll
+// fairly often, and it's genuinely useful: starting `ollama serve` after
+// the page has already loaded, exactly like Scott just did, should not
+// require a manual refresh to be picked up.
+const MODEL_CATALOG_POLL_MS = 6000;
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${bytes} B`;
+}
+
+function dispatchStartAgent(model: string) {
+  window.dispatchEvent(
+    new CustomEvent<{ backend: "ollama"; model: string }>("shoe-adventure:startAgent", {
+      detail: { backend: "ollama", model },
+    }),
+  );
+}
+
 function formatSeconds(seconds: number): string {
   return `${seconds.toFixed(1)}s`;
 }
@@ -74,6 +107,39 @@ export default function GameCanvas() {
   const [snapshot, setSnapshot] = useState<UiSnapshot>(initialSnapshot);
   const [bestTime, setBestTime] = useState<number | null>(null);
   const [topRun, setTopRun] = useState<LeaderboardEntry | null>(null);
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+
+  // The Agent Run model picker's live data (see server/agent/catalog.ts):
+  // polled only while the title screen is up, the one place this picker
+  // can appear, matching Dominion's own "pre-show only" picker lifetime.
+  useEffect(() => {
+    if (snapshot.mode !== "title") return;
+    let cancelled = false;
+    const load = () => {
+      fetch("/api/agent/catalog")
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data: ModelCatalog | null) => {
+          if (cancelled || !data) return;
+          setModelCatalog(data);
+          setSelectedModel((current) => {
+            if (current && data.models.some((m) => m.name === current)) return current;
+            return data.models[0]?.name ?? null;
+          });
+        })
+        .catch(() => {
+          /* Ollama being unreachable is a normal, in-panel state -- see
+           * the "offline" branch below, never a console error. */
+        });
+    };
+    load();
+    const interval = window.setInterval(load, MODEL_CATALOG_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [snapshot.mode]);
 
   // Reads the player's own best time (always available, independent of the server) and
   // fetches the fastest recorded run overall each time a win happens, so the win screen
@@ -202,8 +268,14 @@ export default function GameCanvas() {
       <div className="graphics-badge" aria-label="Browser graphics mode">WEBGPU READY · WEBGL FALLBACK</div>
       {snapshot.superRun && snapshot.mode !== "title" && (
         <aside className="super-run-ribbon" aria-live="polite">
-          <span>AI SUPER RUN</span>
+          <span>{snapshot.agentBackend ? "AGENT RUN" : "AI SUPER RUN"}</span>
           <b>{snapshot.superRunAction}</b>
+          {snapshot.agentBackend && (
+            <em className="agent-chip" title="A real AI model is driving enemy encounters this run">
+              {snapshot.agentBackend}
+              {snapshot.agentModel ? ` · ${snapshot.agentModel}` : ""}
+            </em>
+          )}
           <i aria-hidden="true" /><i aria-hidden="true" /><i aria-hidden="true" />
         </aside>
       )}
@@ -338,6 +410,16 @@ export default function GameCanvas() {
                 <button className="primary-action" type="button" onClick={() => dispatchCommand("restart")}>STITCH THE ROUTE AGAIN <span>↗</span></button>
               )}
               {snapshot.mode === "title" && (
+                <button
+                  className="super-run-action"
+                  type="button"
+                  aria-expanded={agentPickerOpen}
+                  onClick={() => setAgentPickerOpen((open) => !open)}
+                >
+                  AGENT RUN <span>✦</span>
+                </button>
+              )}
+              {snapshot.mode === "title" && (
                 <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>WATCH SUPER RUN <span>✦</span></button>
               )}
               {snapshot.mode === "title" && (
@@ -353,6 +435,58 @@ export default function GameCanvas() {
                 <button className="secondary-action" type="button" onClick={() => dispatchCommand("restart")}>RESTART FROM CHECKPOINT</button>
               )}
             </div>
+
+            {snapshot.mode === "title" && agentPickerOpen && (
+              <div className="agent-picker" aria-label="Choose a model to drive the Agent Run">
+                {!modelCatalog ? (
+                  <p className="agent-picker-status">Checking for Ollama…</p>
+                ) : !modelCatalog.reachable ? (
+                  <p className="agent-picker-status agent-picker-offline">
+                    ✗ Ollama offline — run <code>ollama serve</code> in a terminal, then this list fills in on its own.
+                  </p>
+                ) : modelCatalog.models.length === 0 ? (
+                  <p className="agent-picker-status">
+                    ✓ Ollama ready, but nothing is pulled yet. Run <code>ollama pull llama3.2</code> in a terminal to add a model here.
+                  </p>
+                ) : (
+                  <>
+                    <p className="agent-picker-status agent-picker-online">✓ Ollama ready — {modelCatalog.models.length} model{modelCatalog.models.length === 1 ? "" : "s"} installed</p>
+                    <div className="agent-picker-list">
+                      {modelCatalog.models.map((model) => {
+                        const budgetBytes = (modelCatalog.systemMemory.availableBytes || 0) * MODEL_PICKER_BUDGET_FRACTION;
+                        const wouldFit = model.sizeBytes <= budgetBytes;
+                        return (
+                          <label key={model.name} className={`agent-picker-row${wouldFit ? "" : " unaffordable"}`}>
+                            <input
+                              type="radio"
+                              name="agent-model"
+                              value={model.name}
+                              checked={selectedModel === model.name}
+                              disabled={!wouldFit}
+                              onChange={() => setSelectedModel(model.name)}
+                            />
+                            <span className="agent-picker-name">{model.name}</span>
+                            <span className="agent-picker-size">{formatBytes(model.sizeBytes)}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <button
+                      className="super-run-action agent-picker-confirm"
+                      type="button"
+                      disabled={!selectedModel}
+                      onClick={() => {
+                        if (!selectedModel) return;
+                        dispatchStartAgent(selectedModel);
+                        setAgentPickerOpen(false);
+                      }}
+                    >
+                      START AGENT RUN <span>✦</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             {snapshot.mode === "title" && (
               <div className="controls-guide" aria-label="Game controls">

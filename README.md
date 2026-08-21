@@ -39,6 +39,8 @@ This repo does not have a public hosted deployment yet, so the best way to exper
 
 Use those URLs after starting the dev server to watch the game’s signature moments without needing a live deployment.
 
+The title screen itself also has an **AGENT RUN** button next to the normal LACE UP & LEAP start, so you no longer need a query string to try this. It opens a small picker, live installed-model list pulled straight from Ollama's own API, a plain offline hint if Ollama isn't running yet, and a memory check so a model too large for the machine's free memory greys out. This mirrors the pre-show model picker from Scott's Dominion project, scaled down to Shoe Adventure's single-agent-at-a-time shape. Run `ollama serve` locally first, then open the title screen.
+
 ## 🔊 Sound
 
 Every sound effect and both music layers are generated directly in code with the Web Audio API by default, so the game is never silent even with no audio files checked in. Real recorded mp3s can be dropped in to replace any of those placeholders one at a time: save a file under `client/public/audio/` using the exact name the game expects, and it takes over automatically the next time that sound plays. See [`SOUND_LIST.md`](./SOUND_LIST.md) for the full list of expected file names and what each one should sound like. A mute button lives in the game's own HUD.
@@ -69,7 +71,7 @@ Every sound effect and both music layers are generated directly in code with the
 - `client/public/audio/` — where real recorded sound files go, if you add any
 - `client/src/components/` — UI and game-host components
 - `server/` — Express server entrypoint
-- `server/agent/` — the agent-play "Strategic Director" backend (see [`AGENT_PLAY.md`](./AGENT_PLAY.md))
+- `server/agent/` — the agent-play "Strategic Director" backend (see [`AGENT_PLAY.md`](./AGENT_PLAY.md)), plus the installed-model catalog (`catalog.ts`) backing the title screen's Agent Run picker
 - `server/runs.ts`, `server/runsRouter.ts` — run history and the leaderboard API
 - `shared/` — shared constants and cross-cutting values
 - `patches/` — package patch files

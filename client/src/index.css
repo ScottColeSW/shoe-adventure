@@ -293,10 +293,10 @@ button:focus-visible {
   top: 1rem;
   left: 50%;
   display: grid;
-  grid-template-columns: auto 1fr auto auto auto;
+  grid-template-columns: auto 1fr auto auto auto auto;
   align-items: center;
   gap: 0.45rem;
-  width: min(31rem, 56vw);
+  width: min(34rem, 60vw);
   padding: 0.58rem 0.82rem;
   border: 1px dashed rgba(255, 224, 144, 0.82);
   color: #fff2ce;
@@ -320,6 +320,21 @@ button:focus-visible {
   font-size: 0.56rem;
   font-weight: 500;
   letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chip {
+  overflow: hidden;
+  padding: 0.16rem 0.4rem;
+  border: 1px solid rgba(126, 224, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(28, 74, 92, 0.55);
+  color: #9be8ff;
+  font-size: 0.44rem;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1060,6 +1075,81 @@ button:focus-visible {
 .primary-action:active,
 .secondary-action:active,
 .super-run-action:active { transform: scale(0.97); }
+
+.agent-picker {
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.85rem;
+  max-width: 26rem;
+  border: 1px solid rgba(151, 242, 255, 0.4);
+  border-radius: 0.6rem;
+  background: rgba(10, 24, 46, 0.72);
+}
+
+.agent-picker-status {
+  margin: 0 0 0.5rem;
+  color: #cdeeff;
+  font-size: 0.6rem;
+  line-height: 1.5;
+}
+
+.agent-picker-status code {
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  background: rgba(151, 242, 255, 0.14);
+  color: #9be8ff;
+}
+
+.agent-picker-online { color: #9be8ff; }
+.agent-picker-offline { color: #ffb199; }
+
+.agent-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  max-height: 8.5rem;
+  overflow-y: auto;
+}
+
+.agent-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.32rem 0.4rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+}
+
+.agent-picker-row:hover { background: rgba(151, 242, 255, 0.08); }
+
+.agent-picker-row.unaffordable {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.agent-picker-name {
+  overflow: hidden;
+  flex: 1;
+  color: #fff7e7;
+  font-size: 0.58rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-picker-size {
+  color: rgba(255, 247, 231, 0.55);
+  font-size: 0.54rem;
+}
+
+.agent-picker-confirm {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.58rem;
+}
+
+.agent-picker-confirm:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
 
 .controls-guide {
   display: flex;

@@ -12,6 +12,7 @@ import express, { Router } from "express";
 import { decide } from "./decide";
 import { getStats } from "./history";
 import { agentConfig } from "./config";
+import { getModelCatalog } from "./catalog";
 import type { DecisionRequest } from "./types";
 
 export const agentRouter: Router = Router();
@@ -33,9 +34,9 @@ agentRouter.get("/stats", (_req, res) => {
 });
 
 agentRouter.get("/models", (_req, res) => {
-  // Static roster for now -- Dominion's /api/models does a live reachability
-  // check against each backend (see server/model_catalog.py); a fast-follow
-  // here, not required to prove the decision round-trip in Phase 1.
+  // Static roster: which backends this build knows how to talk to at all,
+  // regardless of whether anything is actually running right now. See
+  // /catalog below for the live, "what's actually installed" version.
   res.json({
     backends: [
       { name: "ollama", url: agentConfig.ollamaUrl, supportsConstrainedOutput: false },
@@ -43,4 +44,13 @@ agentRouter.get("/models", (_req, res) => {
       { name: "hosted", url: agentConfig.hostedApiUrl, supportsConstrainedOutput: true, configured: Boolean(agentConfig.hostedApiKey) },
     ],
   });
+});
+
+agentRouter.get("/catalog", async (_req, res) => {
+  // Backs the title screen's Agent Run model picker: every Ollama model
+  // actually installed on this machine right now, plus enough system
+  // memory info to grey out a pick that would not comfortably fit. See
+  // catalog.ts's own docstring for how this maps to Dominion's
+  // model_catalog.py.
+  res.json(await getModelCatalog());
 });
