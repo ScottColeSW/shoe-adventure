@@ -16,6 +16,7 @@ import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { gameAssets } from "./assets";
+import { AudioDirector } from "./audio";
 
 export type GameMode = "title" | "playing" | "paused" | "won" | "lost";
 type PickupKind =
@@ -37,7 +38,11 @@ type PickupKind =
   | "sneaker"
   | "ultra";
 type ShoeForm = "starter" | "coralChrome" | "moonstep" | "pump" | "hightop" | "loafer" | "cowboy" | "sneaker";
-type EnemyKind = "lace" | "slime" | "skate";
+type EnemyKind = "lace" | "slime" | "skate" | "moth" | "gumTurret";
+/** Mirrors server/agent/types.ts's ENEMY_RESPONSE_OPTIONS -- kept as a
+ * local literal type rather than a cross-boundary import so the client
+ * bundle never depends on server-only code. */
+type AgentEnemyChoice = "gum_stomp" | "lace_lash" | "super_kick" | "avoid";
 type ContraptionKind = "buttonRun" | "laceLever" | "gumPress" | "spoolLift";
 type GameCommand =
   | "start"
@@ -54,7 +59,8 @@ type GameCommand =
   | "releaseLeft"
   | "releaseRight"
   | "superRun"
-  | "celebrate";
+  | "celebrate"
+  | "muteToggle";
 
 interface Platform {
   x: number;
@@ -63,6 +69,12 @@ interface Platform {
   height: number;
   top: number;
   mesh: Mesh;
+  /** Undefined for an ordinary solid platform. "bouncePad" launches the player instead of
+   * grounding them; "crumble" grounds them normally but starts a countdown to vanish. */
+  special?: "bouncePad" | "crumble";
+  crumbleTimer?: number;
+  crumbled?: boolean;
+  respawnTimer?: number;
 }
 
 interface PlayerState {
@@ -113,6 +125,14 @@ interface Enemy {
   bossTier?: "mini" | "boss";
   bossName?: string;
   defeatTimer?: number;
+  /** Moth only: baseline hover height it dives from and returns to. */
+  homeBottom?: number;
+  /** Moth only: seconds until it either starts or ends its next dive. */
+  diveTimer?: number;
+  /** Moth only: mid-dive toward the player rather than on its normal patrol. */
+  diving?: boolean;
+  /** Gum Turret only: an ordinary stomp cannot defeat it, only a Gum Stomp can. */
+  gumArmored?: boolean;
 }
 
 interface Pickup {
@@ -178,6 +198,7 @@ export interface UiSnapshot {
   reunionSeconds: number;
   contraptionsActivated: number;
   contraptionStatus: string;
+  muted: boolean;
 }
 
 const WORLD_END = 66;
@@ -190,6 +211,11 @@ const TEAL = new Color3(0.05, 0.33, 0.39);
 const GOLD = new Color3(1, 0.67, 0.18);
 const VIOLET = new Color3(0.47, 0.25, 0.72);
 const CYAN = new Color3(0.18, 0.84, 0.92);
+// The Left Shoe reuses the Right Shoe's photographed texture (no distinct render exists
+// yet), so this tint is how the two read as different shoes: it multiplies the shared
+// texture toward the warm cream-and-gold tone REALISM.md originally called for, pulling
+// it away from the Right Shoe's pure Rescue Coral without needing new artwork.
+const LEFT_SHOE_TINT = new Color3(1, 0.86, 0.6);
 const MOSS = new Color3(0.24, 0.63, 0.34);
 
 export class GameWorld {
@@ -209,6 +235,25 @@ export class GameWorld {
   private readonly isDemo: boolean;
   private readonly isSuperRunPreview: boolean;
   private readonly isReunionPreview: boolean;
+  private readonly isAgentRun: boolean;
+  private readonly agentBackend: "ollama" | "llamacpp" | "hosted";
+  private readonly agentModel: string;
+  private readonly agentRunId: string;
+  private agentDecisionPending = false;
+  private readonly agentAskedEnemies = new Set<Enemy>();
+  /** Guards the in-flight /api/agent/decide fetch's .then() callback --
+   * the first async work this class has ever had. Every prior update path
+   * was synchronous, so React unmounting mid-frame was never a concern;
+   * now a pending decision can resolve after dispose() has already torn
+   * down the scene, and applyAgentEnemyChoice must not touch Babylon
+   * objects at that point. */
+  private disposed = false;
+  private readonly audio = new AudioDirector();
+  /** Wall-clock start of the current attempt, in ms (Date.now()). Set fresh every time a
+   * run actually begins (start() for a human run, startSuperRun() for the scripted demo
+   * and, via startAgentRun() calling it, a live agent run too) and read once at the win
+   * transition in checkRescue() to compute the completion time posted to /api/runs/complete. */
+  private runStartedAt = 0;
   private player: PlayerState;
   private mode: GameMode = "title";
   private buttons = 0;
@@ -247,10 +292,19 @@ export class GameWorld {
     this.isDemo = query.has("demo");
     this.isSuperRunPreview = query.has("superrun");
     this.isReunionPreview = query.has("dance");
+    // ?agent=<ollama|llamacpp|hosted>&model=<name> -- the Strategic
+    // Director run. Same query-param convention as the showcase modes
+    // above; see GameWorld.ts's updateAgentRun for what it actually does.
+    const agentParam = query.get("agent");
+    this.isAgentRun = agentParam === "ollama" || agentParam === "llamacpp" || agentParam === "hosted";
+    this.agentBackend = (agentParam as "ollama" | "llamacpp" | "hosted" | null) ?? "ollama";
+    this.agentModel = query.get("model") ?? "llama3.2:latest";
+    this.agentRunId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `run-${Date.now()}`;
     this.player = this.createPlayer();
     this.createWorld();
     this.bindInput();
     if (this.isSuperRunPreview) this.startSuperRun();
+    else if (this.isAgentRun) this.startAgentRun();
     else if (this.isReunionPreview) this.previewReunion();
     else this.publishUi(true);
 
@@ -261,9 +315,11 @@ export class GameWorld {
   }
 
   dispose() {
+    this.disposed = true;
     window.removeEventListener("keydown", this.onKeyDownBound);
     window.removeEventListener("keyup", this.onKeyUpBound);
     window.removeEventListener("shoe-adventure:command", this.onCommandBound);
+    this.audio.stopMusic();
     this.sparks.forEach((spark) => spark.mesh.dispose());
   }
 
@@ -328,9 +384,15 @@ export class GameWorld {
     this.createPlatform(38, -4.7, 17.5, 1.0, "cardboard");
     this.createPlatform(56, -4.7, 18, 1.0, "cardboard");
 
+    // Bounce pad: an alternate, faster route up onto the Stage 1 shoebox lip.
+    this.createPlatform(12.6, -4.05, 2.1, 0.5, "bouncePad");
     this.createPlatform(15.8, -3.2, 4.6, 0.8, "shoeBox");
     this.createPlatform(21.8, -1.65, 4.1, 0.8, "shoeBox");
+    // Two crumble platforms across the Stage 2 laundry lane, both reachable stepping
+    // stones rather than the only path through, so a mistimed crumble never strands you.
+    this.createPlatform(25.1, -2.2, 2.6, 0.6, "crumble");
     this.createPlatform(28.4, -2.85, 5.1, 0.8, "laundry");
+    this.createPlatform(31.6, -1.85, 2.6, 0.6, "crumble");
     this.createLaceBridge(34.4, -1.25, 5.4);
     this.createPlatform(41.7, -0.15, 4.4, 0.8, "shoeBox");
     this.createPlatform(47.4, -1.6, 4.2, 0.8, "shoeBox");
@@ -348,7 +410,7 @@ export class GameWorld {
     spoolRibbon.material = this.createMaterial("spoolRibbonMat", RESCUE_CORAL, new Color3(0.45, 0.05, 0.02));
   }
 
-  private createPlatform(x: number, y: number, width: number, height: number, kind: "cardboard" | "shoeBox" | "laundry" | "tower"): Platform {
+  private createPlatform(x: number, y: number, width: number, height: number, kind: "cardboard" | "shoeBox" | "laundry" | "tower" | "bouncePad" | "crumble"): Platform {
     const mesh = MeshBuilder.CreateBox(`platform-${kind}-${x}`, { width, height, depth: 1.45 }, this.scene);
     mesh.position = new Vector3(x, y, 0.9);
     mesh.isPickable = false;
@@ -358,17 +420,30 @@ export class GameWorld {
       shoeBox: new Color3(0.66, 0.38, 0.18),
       laundry: new Color3(0.18, 0.43, 0.53),
       tower: new Color3(0.55, 0.19, 0.16),
+      bouncePad: new Color3(0.28, 0.78, 0.9),
+      crumble: new Color3(0.56, 0.44, 0.28),
     } as const;
-    const material = this.createMaterial(`platformMat-${kind}-${x}`, palette[kind], palette[kind].scale(0.16));
+    const material = this.createMaterial(`platformMat-${kind}-${x}`, palette[kind], kind === "bouncePad" ? palette[kind].scale(0.55) : palette[kind].scale(0.16));
     material.specularColor = new Color3(0.35, 0.21, 0.1);
+    if (kind === "crumble") material.alpha = 0.88;
     mesh.material = material;
 
-    const tape = MeshBuilder.CreateBox(`tape-${x}`, { width: Math.max(0.55, width * 0.22), height: 0.055, depth: 1.49 }, this.scene);
-    tape.position = new Vector3(x + width * 0.08, y + height / 2 + 0.03, 0.9);
-    tape.material = this.createMaterial(`tapeMat-${x}`, CREAM, new Color3(0.13, 0.08, 0.03));
-    tape.isPickable = false;
+    if (kind === "bouncePad") {
+      // A glowing ring on top signals "this one launches you" before the player lands.
+      const ring = MeshBuilder.CreateTorus(`bouncePadRing-${x}`, { diameter: width * 0.7, thickness: 0.07, tessellation: 24 }, this.scene);
+      ring.position = new Vector3(x, y + height / 2 + 0.03, 0.9);
+      ring.rotation.x = Math.PI / 2;
+      ring.material = this.createMaterial(`bouncePadRingMat-${x}`, CYAN, CYAN);
+      ring.isPickable = false;
+    } else {
+      const tape = MeshBuilder.CreateBox(`tape-${x}`, { width: Math.max(0.55, width * 0.22), height: 0.055, depth: 1.49 }, this.scene);
+      tape.position = new Vector3(x + width * 0.08, y + height / 2 + 0.03, 0.9);
+      tape.material = this.createMaterial(`tapeMat-${x}`, kind === "crumble" ? new Color3(0.8, 0.72, 0.56) : CREAM, new Color3(0.13, 0.08, 0.03));
+      tape.isPickable = false;
+    }
 
-    return this.addPlatform(x, y, width, height, mesh);
+    const special = kind === "bouncePad" || kind === "crumble" ? kind : undefined;
+    return this.addPlatform(x, y, width, height, mesh, special);
   }
 
   private createContraptions() {
@@ -495,8 +570,8 @@ export class GameWorld {
     }
   }
 
-  private addPlatform(x: number, y: number, width: number, height: number, mesh: Mesh): Platform {
-    const platform = { x, y, width, height, top: y + height / 2, mesh };
+  private addPlatform(x: number, y: number, width: number, height: number, mesh: Mesh, special?: "bouncePad" | "crumble"): Platform {
+    const platform: Platform = { x, y, width, height, top: y + height / 2, mesh, special };
     this.platforms.push(platform);
     return platform;
   }
@@ -509,6 +584,7 @@ export class GameWorld {
     height: number,
     position: Vector3,
     glowColor: Color3,
+    tintColor: Color3 = Color3.White(),
   ): Mesh {
     const plane = MeshBuilder.CreatePlane(name, { width, height }, this.scene);
     plane.parent = root;
@@ -522,6 +598,9 @@ export class GameWorld {
     material.diffuseTexture = texture;
     material.opacityTexture = texture;
     material.useAlphaFromDiffuseTexture = true;
+    // White is the neutral default (renders the texture unmodified). A non-white tint
+    // multiplies the shared texture toward a different tone -- see LEFT_SHOE_TINT.
+    material.diffuseColor = tintColor;
     material.emissiveColor = glowColor.scale(0.14);
     material.specularColor = Color3.Black();
     material.backFaceCulling = false;
@@ -637,6 +716,9 @@ export class GameWorld {
     // Each transformation gate has two light foes just beyond it, so its instant move reads clearly in motion.
     this.enemies.push(this.createLaceGoblin(8.05, -4.2, 7.7, 8.4));
     this.enemies.push(this.createSlime(8.9, -4.2, 8.55, 9.25));
+    // A flying dive-bomber in the first stage, well clear of the ground-bound goblins on
+    // either side, so its patrol-and-dive movement reads as clearly new in motion.
+    this.enemies.push(this.createMoth(12.5, -1.3, 9.5, 16.4));
     this.enemies.push(this.createLaceGoblin(17.18, -2.8, 16.8, 17.55));
     this.enemies.push(this.createSlime(17.88, -2.8, 17.58, 18.12));
     this.enemies.push(this.createLaceGoblin(27.45, -2.45, 27.1, 27.85));
@@ -651,6 +733,9 @@ export class GameWorld {
     this.enemies.push(this.createLaceGoblin(49.3, -1.2, 47.8, 50.0));
     this.enemies.push(this.createLaceGoblin(50.2, -4.2, 47.6, 53.6));
     this.enemies.push(this.createMiniBoss(56.7, 2.4, 55.2, 58.1, "Gum Marshal"));
+    // Placed after the Gum Stomp pickup at x=55.0, so the player always has the tool
+    // this hazard requires by the time they reach it.
+    this.enemies.push(this.createGumTurret(57.9, 2.4));
     this.enemies.push(this.createTrueBoss(59.05, 2.4, 58.3, 59.55));
   }
 
@@ -691,6 +776,87 @@ export class GameWorld {
     }
     root.position = new Vector3(x, bottom, -0.3);
     return { kind: "slime", root, x, bottom, minX, maxX, speed: -0.86, width: 0.9, height: 0.65, alive: true, phase: x };
+  }
+
+  /** A flying dive-bomber: genuinely different movement from the ground-bound goblin and
+   * slime, driven by updateMothFlight rather than the shared patrol-and-hover code. */
+  private createMoth(x: number, homeBottom: number, minX: number, maxX: number): Enemy {
+    const root = new TransformNode(`moth-${x}`, this.scene);
+    const body = MeshBuilder.CreateSphere(`mothBody-${x}`, { diameter: 0.58, segments: 16 }, this.scene);
+    body.parent = root;
+    body.position.y = 0.5;
+    body.scaling = new Vector3(0.82, 0.62, 0.68);
+    body.material = this.createMaterial(`mothBodyMat-${x}`, new Color3(0.86, 0.78, 0.95), VIOLET);
+    for (const side of [-1, 1]) {
+      const wing = MeshBuilder.CreateDisc(`mothWing-${x}-${side}`, { radius: 0.4, tessellation: 3 }, this.scene);
+      wing.parent = root;
+      wing.position = new Vector3(side * 0.3, 0.56, -0.08);
+      wing.rotation.y = side * 0.55;
+      const wingMaterial = this.createMaterial(`mothWingMat-${x}-${side}`, VIOLET, new Color3(0.3, 0.14, 0.4));
+      wingMaterial.alpha = 0.72;
+      wingMaterial.backFaceCulling = false;
+      wing.material = wingMaterial;
+    }
+    const eye = MeshBuilder.CreateSphere(`mothEye-${x}`, { diameter: 0.1, segments: 10 }, this.scene);
+    eye.parent = root;
+    eye.position = new Vector3(0.11, 0.55, -0.3);
+    eye.material = this.createMaterial(`mothEyeMat-${x}`, CREAM, GOLD);
+    root.position = new Vector3(x, homeBottom, -0.3);
+    return {
+      kind: "moth",
+      root,
+      x,
+      bottom: homeBottom,
+      minX,
+      maxX,
+      speed: 1.1,
+      width: 0.7,
+      height: 0.62,
+      alive: true,
+      phase: x,
+      homeBottom,
+      diveTimer: 1.4 + (x % 3),
+    };
+  }
+
+  /** A stationary hazard a plain stomp cannot defeat -- only tryGumStomp's gumArmored
+   * check lets it die, so the ability the player already unlocked has a reason to matter
+   * again this late in the route. */
+  private createGumTurret(x: number, bottom: number): Enemy {
+    const root = new TransformNode(`gumTurret-${x}`, this.scene);
+    const base = MeshBuilder.CreateCylinder(`gumTurretBase-${x}`, { height: 0.32, diameterTop: 0.9, diameterBottom: 1.02, tessellation: 20 }, this.scene);
+    base.parent = root;
+    base.position.y = 0.16;
+    base.material = this.createMaterial(`gumTurretBaseMat-${x}`, new Color3(0.24, 0.18, 0.1), new Color3(0.04, 0.03, 0.01));
+    const wad = MeshBuilder.CreateSphere(`gumTurretWad-${x}`, { diameter: 0.86, segments: 18 }, this.scene);
+    wad.parent = root;
+    wad.position.y = 0.62;
+    wad.scaling = new Vector3(1, 0.9, 1);
+    wad.material = this.createMaterial(`gumTurretWadMat-${x}`, MOSS, new Color3(0.05, 0.24, 0.06));
+    const nozzle = MeshBuilder.CreateCylinder(`gumTurretNozzle-${x}`, { height: 0.36, diameter: 0.24, tessellation: 12 }, this.scene);
+    nozzle.parent = root;
+    nozzle.position = new Vector3(0, 0.78, -0.42);
+    nozzle.rotation.x = Math.PI / 2.4;
+    nozzle.material = this.createMaterial(`gumTurretNozzleMat-${x}`, new Color3(0.7, 0.55, 0.2), GOLD);
+    const eye = MeshBuilder.CreateSphere(`gumTurretEye-${x}`, { diameter: 0.13, segments: 12 }, this.scene);
+    eye.parent = root;
+    eye.position = new Vector3(0.16, 0.68, -0.38);
+    eye.material = this.createMaterial(`gumTurretEyeMat-${x}`, CREAM, RESCUE_CORAL);
+    root.position = new Vector3(x, bottom, -0.3);
+    return {
+      kind: "gumTurret",
+      root,
+      x,
+      bottom,
+      minX: x,
+      maxX: x,
+      speed: 0,
+      width: 0.98,
+      height: 0.92,
+      alive: true,
+      phase: x,
+      gumArmored: true,
+    };
   }
 
   private createRollerSkate(x: number, bottom: number, minX: number, maxX: number): Enemy {
@@ -952,7 +1118,9 @@ export class GameWorld {
     upper.parent = root;
     upper.position = new Vector3(-0.02, 0.58, 0);
     upper.scaling = new Vector3(0.9, 0.58, 0.55);
-    upper.material = this.createMaterial("leftUpperMat", new Color3(1, 0.72, 0.55), RESCUE_CORAL);
+    // Warm cream-and-gold, not Rescue Coral: this is the Left Shoe's half of the visual
+    // differentiation from the Right Shoe, matching REALISM.md's original palette intent.
+    upper.material = this.createMaterial("leftUpperMat", new Color3(1, 0.86, 0.6), GOLD);
     const heart = MeshBuilder.CreateSphere("leftHeart", { diameter: 0.16, segments: 12 }, this.scene);
     heart.parent = root;
     heart.position = new Vector3(-0.12, 0.72, -0.43);
@@ -965,7 +1133,8 @@ export class GameWorld {
       2.22,
       1.7,
       new Vector3(-0.03, 0.87, -0.62),
-      RESCUE_CORAL,
+      GOLD,
+      LEFT_SHOE_TINT,
     );
     return root;
   }
@@ -1030,6 +1199,10 @@ export class GameWorld {
     if (command === "holdRight") this.held.right = true;
     if (command === "superRun") this.startSuperRun();
     if (command === "celebrate") this.previewReunion();
+    if (command === "muteToggle") {
+      this.audio.toggleMute();
+      this.publishUi(true);
+    }
     if (this.superRun && !["pause", "restart"].includes(command)) return;
     if (command === "releaseLeft") this.held.left = false;
     if (command === "releaseRight") this.held.right = false;
@@ -1037,6 +1210,9 @@ export class GameWorld {
 
   private start() {
     if (this.mode === "title" || this.mode === "paused") {
+      this.audio.init();
+      this.audio.startMusic();
+      this.runStartedAt = Date.now();
       this.superRun = false;
       this.superRunAction = "AI standing by.";
       this.mode = "playing";
@@ -1077,6 +1253,7 @@ export class GameWorld {
   private startSuperRun() {
     this.mode = "playing";
     this.superRun = true;
+    this.runStartedAt = Date.now();
     this.superRunStage = 1;
     this.superRunStageLabel = "SHOEBOX SPRINT";
     this.superRunMilestones.clear();
@@ -1135,6 +1312,20 @@ export class GameWorld {
     this.publishUi(true);
   }
 
+  /** Same setup as startSuperRun -- route, checkpoints, and camera framing
+   * are untouched between the two modes, only the enemy-response decision
+   * differs (see updateAgentRun). Kept as its own method rather than a
+   * flag on startSuperRun so the two entry points stay easy to read
+   * independently as the agent-run feature grows more decision points. */
+  private startAgentRun() {
+    this.startSuperRun();
+    this.agentAskedEnemies.clear();
+    this.agentDecisionPending = false;
+    this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
+    this.message = "AGENT RUN: " + this.superRunAction;
+    this.publishUi(true);
+  }
+
   private previewReunion() {
     this.superRun = false;
     this.reunionTimer = 6;
@@ -1161,12 +1352,14 @@ export class GameWorld {
       this.player.jumpUsed = false;
       this.message = this.player.superJump ? "SUPER JUMP! Right Shoe launches toward the bonus lane." : this.message;
       this.spawnSparks(this.player.x - this.player.facing * 0.35, this.player.bottom + 0.18, this.player.superJump ? CYAN : CREAM, this.player.superJump ? 16 : 6, this.player.superJump ? 3.3 : 1.7);
+      this.audio.playJump();
     } else if (!this.player.jumpUsed && this.player.doubleJumps > 0) {
       this.player.doubleJumps -= 1;
       this.player.jumpUsed = true;
       this.player.vy = 8.25;
       this.message = "Wingtip Feather lifts the rescue route.";
       this.spawnSparks(this.player.x, this.player.bottom + 0.5, GOLD, 11, 2.3);
+      this.audio.playJump();
       this.publishUi(true);
     }
   }
@@ -1242,8 +1435,10 @@ export class GameWorld {
     this.player.formAttackTimer = form === "hightop" ? 0.96 : this.superRun ? 0.76 : 0.52;
     this.player.invulnerable = Math.max(this.player.invulnerable, form === "hightop" ? 1.45 : 0.42);
 
+    // gumArmored enemies (the Gum Turret) sit out every form attack -- only tryGumStomp
+    // is allowed to defeat one, so the ability keeps a reason to matter on its own.
     const near = (range: number, forward = false) => this.enemies.filter((enemy) =>
-      enemy.alive && Math.abs(enemy.bottom - this.player.bottom) < 2.55 && Math.abs(enemy.x - this.player.x) < range && (!forward || (enemy.x - this.player.x) * this.player.facing > -0.28),
+      enemy.alive && !enemy.gumArmored && Math.abs(enemy.bottom - this.player.bottom) < 2.55 && Math.abs(enemy.x - this.player.x) < range && (!forward || (enemy.x - this.player.x) * this.player.facing > -0.28),
     );
     let targets: Enemy[] = [];
     let color = RESCUE_CORAL;
@@ -1352,7 +1547,7 @@ export class GameWorld {
     this.player.lashTimer = this.superRun ? 0.58 : 0.34;
     this.player.invulnerable = Math.max(this.player.invulnerable, 0.32);
     const targets = this.enemies.filter((enemy) =>
-      enemy.alive && (enemy.x - this.player.x) * this.player.facing > -0.35 && (enemy.x - this.player.x) * this.player.facing < 3.45 && Math.abs(enemy.bottom - this.player.bottom) < 2.1,
+      enemy.alive && !enemy.gumArmored && (enemy.x - this.player.x) * this.player.facing > -0.35 && (enemy.x - this.player.x) * this.player.facing < 3.45 && Math.abs(enemy.bottom - this.player.bottom) < 2.1,
     );
     this.triggerCinematicBeat(0.18, 0.08);
     this.spawnSparks(this.player.x + this.player.facing * 1.15, this.player.bottom + 0.72, CREAM, 16, 3.8);
@@ -1390,15 +1585,59 @@ export class GameWorld {
 
     this.updateContraptions(delta);
     if (this.isDemo) this.updateDemo(delta);
-    if (this.superRun) this.updateSuperRun(delta);
+    if (this.superRun && this.isAgentRun) this.updateAgentRun(delta);
+    else if (this.superRun) this.updateSuperRun(delta);
     this.updatePlayer(delta);
     this.updateEnemies(delta);
     this.updatePickups(delta);
     this.updateCheckpoints();
+    this.updateCrumblePlatforms(delta);
     this.updateSparks(delta);
     this.updateCamera(delta);
+    this.updateMusicIntensity(delta);
     this.checkRescue();
     this.publishUi(false);
+  }
+
+  /** Ticks every crumble platform's vanish-then-respawn cycle. Landing on one sets
+   * crumbleTimer (in updatePlayer's collision loop); once that reaches zero the mesh
+   * hides and stops colliding, then respawnTimer brings it back so the lane is never
+   * permanently blocked by one mistimed crossing. */
+  private updateCrumblePlatforms(delta: number) {
+    for (const platform of this.platforms) {
+      if (platform.special !== "crumble") continue;
+      if (!platform.crumbled && platform.crumbleTimer !== undefined) {
+        platform.crumbleTimer -= delta;
+        const shake = Math.max(0, 0.06 - platform.crumbleTimer * 0.05);
+        platform.mesh.position.x = platform.x + Math.sin(this.titleTime * 42) * shake;
+        if (platform.crumbleTimer <= 0) {
+          platform.crumbled = true;
+          platform.crumbleTimer = undefined;
+          platform.respawnTimer = 2.6;
+          platform.mesh.setEnabled(false);
+          this.spawnSparks(platform.x, platform.top, new Color3(0.56, 0.44, 0.28), 12, 2.4);
+        }
+      } else if (platform.crumbled && platform.respawnTimer !== undefined) {
+        platform.respawnTimer -= delta;
+        if (platform.respawnTimer <= 0) {
+          platform.crumbled = false;
+          platform.respawnTimer = undefined;
+          platform.mesh.position.x = platform.x;
+          platform.mesh.setEnabled(true);
+          this.spawnSparks(platform.x, platform.top, CREAM, 10, 2.0);
+        }
+      }
+    }
+  }
+
+  /** A live enemy or boss within earshot of the player nudges the music's intense layer
+   * up; nothing nearby lets it fade back to the calm bed. Recomputed every frame rather
+   * than event-driven, since "nearby" is a continuous, moving condition. */
+  private updateMusicIntensity(delta: number) {
+    const threatRange = 9;
+    const nearThreat = this.enemies.some((enemy) => enemy.alive && Math.abs(enemy.x - this.player.x) < threatRange);
+    this.audio.setIntensity(nearThreat ? 1 : 0);
+    this.audio.update(delta);
   }
 
   private updateContraptions(delta: number) {
@@ -1600,6 +1839,7 @@ export class GameWorld {
 
     const platformAhead = this.platforms.some(
       (platform) =>
+        !platform.crumbled &&
         platform.x - platform.width / 2 > this.player.x &&
         platform.x - platform.width / 2 - this.player.x < 2.35 &&
         platform.top > this.player.bottom + 0.18,
@@ -1644,6 +1884,232 @@ export class GameWorld {
       this.player.vx = Math.max(this.player.vx, 6.4);
       this.superRunAction = "RESCUE PROTOCOL — Boss down; completing the final stitch into the dance finale.";
     }
+  }
+
+  /** A clone of updateSuperRun rather than an edit to it -- the proven
+   * deterministic Super Run stays byte-for-byte untouched as the literal
+   * fallback body every agent-run decision resolves to on failure. Route
+   * milestones, contraptions, pickups, camera framing, and boss handling
+   * are identical to updateSuperRun; the only behavioral difference is the
+   * regular/mini-boss enemy-response branch, which asks the configured
+   * agent backend instead of following the hardcoded priority order (see
+   * handleAgentEnemyDecision / scriptedEnemyChoice below). */
+  private updateAgentRun(delta: number) {
+    this.superRunKickTimer = Math.max(0, this.superRunKickTimer - delta);
+    this.superRunPauseTimer = Math.max(0, this.superRunPauseTimer - delta);
+    this.held.left = false;
+    this.held.right = this.player.x < 63.2 && this.superRunPauseTimer <= 0;
+    if (this.superRunPauseTimer > 0 && this.player.dashTimer <= 0 && this.player.formAttackTimer <= 0 && this.player.ultraTimer <= 0) {
+      this.player.vx *= Math.max(0.22, 1 - delta * 8.5);
+    }
+
+    if (this.player.bottom < -6.6) {
+      this.player.bottom = -4.2;
+      this.player.vy = 0;
+      this.player.vx = 6.4;
+      this.player.grounded = true;
+      this.player.invulnerable = Math.max(this.player.invulnerable, 1.25);
+      this.superRunAction = "AI RECOVERY — returning Right Shoe to the stitched finale lane.";
+    }
+
+    if (this.superRunPauseTimer > 0) return;
+
+    const x = this.player.x;
+    if (x >= 24.1) this.enterSuperRunStage(2, "LAUNDRY LABYRINTH", "Lace Bridge");
+    if (x >= 44.4) this.enterSuperRunStage(3, "ROGUE TOWER BREAK", "Moonlit Shoeboxes");
+
+    if (x >= 5.4 && this.markSuperRunMilestone("stage-1-button-trail", "STAGE 1/3 — button trail vacuumed; the Button Ball Run is primed.")) {
+      this.sweepSuperRunPickups(0, 6.9, "BUTTON TRAIL");
+    }
+    if (x >= 6.72 && this.markSuperRunMilestone("pump", "PUMP FORM — Heel Strike demolishes the starter pair.")) this.claimSuperRunPowerup("pump", "PUMP FORM — Heel Strike demolishes the starter pair.");
+    if (x >= 8.2 && this.markSuperRunMilestone("feather-one", "WINGTIP FLIGHT — the AI lines up a double-jump.")) this.claimSuperRunPowerup("feather", "WINGTIP FLIGHT — double-jump unlocked.");
+    if (!this.player.grounded && !this.player.jumpUsed && this.player.doubleJumps > 0 && x >= 8.7 && x <= 10.8 && this.markSuperRunMilestone("double-jump", "DOUBLE JUMP — Wingtip Feather clears the shoebox lip.")) this.tryJump();
+    if (x >= 10.15 && this.markSuperRunMilestone("button-run", "BUTTON BALL RUN — the AI releases the coral button down its rail.")) this.activateSuperRunContraption("buttonRun", "BUTTON BALL RUN — coral button released down the shoebox rail.");
+    if (x >= 11.72 && this.markSuperRunMilestone("super-jump", "SUPER JUMP PATCH — spring-loaded soles target the Sky Stitch cache.")) this.claimSuperRunPowerup("superJump", "SUPER JUMP PATCH — spring-loaded soles armed.");
+    if (x >= 12.72 && this.markSuperRunMilestone("coral-chrome", "CORAL CHROME — the hero shine upgrades for the long run.")) this.claimSuperRunPowerup("chrome", "CORAL CHROME — hero shine upgraded.");
+    if (x >= 14.8 && this.markSuperRunMilestone("bonus-cache", "SKY STITCH BONUS — an aerial cache awards an extra dash charge.")) this.claimSuperRunPowerup("bonus", "SKY STITCH BONUS — Super Jump snatches the aerial cache.");
+    if (x >= 16.02 && this.markSuperRunMilestone("hightop", "HIGHTOP FORM — Ankle Guard counters the elevated pair.")) this.claimSuperRunPowerup("hightop", "HIGHTOP FORM — Ankle Guard counters the elevated pair.");
+    if (x >= 18.82 && this.markSuperRunMilestone("dash-one", "LACE DASH — the AI bursts through the first long lane.")) this.claimSuperRunPowerup("dash", "LACE DASH — coral boost charged.");
+    if (x >= 19.35 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0 && this.markSuperRunMilestone("dash-demonstration", "LACE DASH — a high-speed route correction skips the laundry gap.")) this.tryDash();
+    if (x >= 23.5 && this.markSuperRunMilestone("stage-1-complete", "STAGE 1 CLEAR — all shoebox foes and patches are reconciled before the bridge.")) {
+      this.sweepSuperRunPickups(0, 24.3, "STAGE 1 PATCH SWEEP");
+      this.clearSuperRunEnemies(0, 24.3, "STAGE 1 ROUTE SWEEP");
+    }
+
+    if (x >= 26.1 && this.markSuperRunMilestone("loafer", "LOAFER FORM — Slip Slide sweeps the laundry ledge.")) this.claimSuperRunPowerup("loafer", "LOAFER FORM — Slip Slide sweeps the laundry ledge.");
+    if (x >= 29.95 && this.markSuperRunMilestone("moonstep", "MOONSTEP RUNNER — the cobalt traversal form handles the lace bridge.")) this.claimSuperRunPowerup("moonstep", "MOONSTEP RUNNER — cobalt speed form unlocked.");
+    if (x >= 31.0 && this.player.grounded && this.markSuperRunMilestone("moonstep-jump", "MOONSTEP LEAP — the AI keeps altitude above the lace bridge.")) this.tryJump();
+    if (x >= 33.0 && this.markSuperRunMilestone("heart-one", "HEART SOLE — route integrity is restored before the bridge guard.")) this.claimSuperRunPowerup("heart", "HEART SOLE — route integrity restored.");
+    if (x >= 35.2 && this.markSuperRunMilestone("stage-2-patch-sweep", "LAUNDRY LABYRINTH — the AI has recovered every bridge-side patch.")) this.sweepSuperRunPickups(24.3, 39.5, "STAGE 2 PATCH SWEEP");
+    if (x >= 36.4 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0 && this.markSuperRunMilestone("bridge-dash", "MOONSTEP + LACE DASH — the AI corrects across the bridge.")) this.tryDash();
+    if (x >= 39.72 && this.markSuperRunMilestone("cowboy", "COWBOY BOOT FORM — Spur Kick reaches across the bridge sentries.")) this.claimSuperRunPowerup("cowboy", "COWBOY BOOT FORM — Spur Kick clears the bridge sentries.");
+    if (x >= 41.72 && this.markSuperRunMilestone("lace-lash", "LACE LASH — the AI snaps the Lace Lever and topples its stitch dominoes.")) {
+      this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
+      this.player.lashCooldown = 0;
+      this.tryLaceLash();
+      this.activateSuperRunContraption("laceLever", "LACE LEVER — AI lash topples the dominoes and stitches the bridge tight.");
+    }
+    if (x >= 43.7 && this.markSuperRunMilestone("stage-2-complete", "STAGE 2 CLEAR — the bridge guard and every laundry-lane foe are resolved.")) {
+      this.sweepSuperRunPickups(24.3, 44.6, "STAGE 2 PATCH SWEEP");
+      this.clearSuperRunEnemies(24.3, 44.6, "STAGE 2 ROUTE SWEEP");
+    }
+
+    if (x >= 46.65 && this.markSuperRunMilestone("sneaker", "SNEAKER FORM — Sprint Burst chains through the Tower Break vanguard.")) this.claimSuperRunPowerup("sneaker", "SNEAKER FORM — Sprint Burst chains through the Tower Break vanguard.");
+    if (x >= 47.1 && this.markSuperRunMilestone("moon", "MOON INSOLE — the AI slows the tower vanguard for a clean final setup.")) this.claimSuperRunPowerup("moon", "MOON INSOLE — enemies slowed for the finale.");
+    if (x >= 50.2 && this.markSuperRunMilestone("stage-3-patch-sweep", "TOWER BREAK — every remaining route patch is indexed before the final gate.")) this.sweepSuperRunPickups(44.6, 53.3, "STAGE 3 PATCH SWEEP");
+    if (x >= 52.75 && this.markSuperRunMilestone("feather-two", "FINAL WINGTIP — a second double-jump token secures the high recovery line.")) this.claimSuperRunPowerup("feather", "FINAL WINGTIP — high lane secured.");
+    if (x >= 53.08 && this.markSuperRunMilestone("tower-risk-check", "RISK CHECK — the AI absorbs a controlled tower graze, preserving one heart for the recovery test.")) {
+      this.player.hearts = Math.max(1, this.player.hearts - 1);
+      this.player.invulnerable = Math.max(this.player.invulnerable, 0.6);
+      this.spawnSparks(this.player.x, this.player.bottom + 0.65, RESCUE_CORAL, 12, 2.6);
+    }
+    if (x >= 53.35 && this.markSuperRunMilestone("tower-heart", "HEALTH POWER-UP — the AI takes the Heart Sole before committing to the mini-boss.")) this.claimSuperRunPowerup("heart", "HEALTH POWER-UP — Heart Sole restores the Tower Break safety margin.");
+    if (x >= 54.72 && this.markSuperRunMilestone("gum-stomp", "GUM STOMP — the AI arms the sticky impact that powers the tower ramp.")) {
+      this.claimSuperRunPowerup("gum", "GUM STOMP — sticky sole impact armed.");
+      this.player.stompCooldown = 0;
+      this.tryGumStomp();
+      this.activateSuperRunContraption("gumPress", "GUM PRESS — AI Gum Stomp compresses the ramp for the tower approach.");
+    }
+    if (x >= 55.95 && this.markSuperRunMilestone("tower-mini-boss", "MINI-BOSS — Gum Marshal enters; the AI performs a measured Gum Stomp break.")) {
+      this.player.stompCooldown = 0;
+      this.tryGumStomp();
+      this.clearSuperRunEnemies(54.8, 57.9, "GUM MARSHAL MINI-BOSS BREAK");
+    }
+    if (x >= 57.2 && this.markSuperRunMilestone("spool-lift", "SPOOL LIFT — the AI winds the final rescue latch while the tower lane clears.")) this.activateSuperRunContraption("spoolLift", "SPOOL LIFT — thread winch raises the final rescue latch.");
+    if (x >= 58.05 && this.markSuperRunMilestone("dash-two", "FINAL LACE DASH — the AI enters the Boss finishing lane.")) this.claimSuperRunPowerup("dash", "FINAL LACE DASH — boost charged for the finish.");
+    if (x >= 58.22 && this.markSuperRunMilestone("ultra", "SUPER SMASH CORE — lightning finisher locks onto The Tangled Titan.")) this.claimSuperRunPowerup("ultra", "SUPER SMASH CORE — lightning finisher locks onto The Tangled Titan.");
+    if (x >= 58.32 && this.markSuperRunMilestone("final-coverage", "FINAL ROUTE AUDIT — every remaining patch and non-Boss enemy is resolved before the lightning finisher.")) {
+      this.sweepSuperRunPickups(53.3, WORLD_END + 1, "FINAL PATCH SWEEP");
+      this.clearSuperRunEnemies(44.6, 58.3, "TOWER VANGUARD SWEEP");
+    }
+
+    const platformAhead = this.platforms.some(
+      (platform) =>
+        !platform.crumbled &&
+        platform.x - platform.width / 2 > this.player.x &&
+        platform.x - platform.width / 2 - this.player.x < 2.35 &&
+        platform.top > this.player.bottom + 0.18,
+    );
+    const showcaseBeat = [7.15, 13.3, 16.35, 21.1, 26.6, 35.1, 40.1, 42.0, 47.0, 51.1, 58.0].some((beat) => Math.abs(this.player.x - beat) < 0.16);
+    if (this.player.grounded && (platformAhead || showcaseBeat) && this.superRunPauseTimer <= 0) this.tryJump();
+
+    const bossInUltraRange = this.enemies.find(
+      (enemy) => enemy.alive && enemy.bossTier === "boss" && Math.abs(enemy.x - this.player.x) < 8.8,
+    );
+    if (bossInUltraRange && this.player.ultraMove && this.player.ultraCooldown <= 0) this.tryUltraMove();
+
+    // Only the branch below differs from updateSuperRun: a regular or
+    // mini-boss enemy in range is a real agent decision, not a hardcoded
+    // priority order. Boss-gate handling stays identical -- that's a
+    // cinematic gate keyed on the Ultra Move unlock, not part of the
+    // Phase 1 enemy-response decision.
+    const target = this.enemies.find(
+      (enemy) => enemy.alive && enemy.x - this.player.x < 1.38 && enemy.x >= this.player.x - 0.8,
+    );
+    if (target) {
+      if (target.bossTier === "boss" && this.player.ultraMove && this.player.ultraCooldown <= 0) {
+        this.tryUltraMove();
+      } else if (target.bossTier === "boss") {
+        this.superRunAction = "BOSS GATE — the AI is lining up the lightning Super Smash core.";
+      } else {
+        this.handleAgentEnemyDecision(target);
+      }
+    }
+
+    if (this.player.x > 60.1 && this.mode === "playing") this.superRunAction = "RESCUE PROTOCOL — crossing into Lefty’s tower.";
+    if (this.bossDefeated && this.player.x >= 58.6 && this.mode === "playing") {
+      this.player.x = Math.max(this.player.x, 60.8);
+      this.player.bottom = Math.max(this.player.bottom, -4.2);
+      this.player.vx = Math.max(this.player.vx, 6.4);
+      this.superRunAction = "RESCUE PROTOCOL — Boss down; completing the final stitch into the dance finale.";
+    }
+  }
+
+  /** The exact hardcoded priority order updateSuperRun always used for
+   * this branch -- kept verbatim as: (a) the true fallback when the agent
+   * backend is unreachable or replies with something unparseable, and
+   * (b) the safety mapper when the agent picks a legal option that isn't
+   * actually usable right now (e.g. "gum_stomp" with no charge ready). */
+  private scriptedEnemyChoice(enemy: Enemy): AgentEnemyChoice {
+    if (enemy.bossTier === "mini" && enemy.bossName === "Gum Marshal" && this.player.gumStomp && this.player.stompCooldown <= 0) return "gum_stomp";
+    if (enemy.bossTier === "mini" && this.player.laceLash && this.player.lashCooldown <= 0) return "lace_lash";
+    if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) return "gum_stomp";
+    if (this.player.laceLash && this.player.lashCooldown <= 0) return "lace_lash";
+    return "super_kick";
+  }
+
+  /** Fires at most one in-flight decision request at a time and never asks
+   * about the same enemy twice (mirrors markSuperRunMilestone's Set-based
+   * dedupe). Uses the same superRunPauseTimer cinematic-beat mechanism the
+   * rest of this file already relies on to hold the visible state
+   * steady -- not a new async-control-flow subsystem. */
+  private handleAgentEnemyDecision(enemy: Enemy) {
+    if (this.agentAskedEnemies.has(enemy) || this.agentDecisionPending) return;
+    this.agentAskedEnemies.add(enemy);
+    this.agentDecisionPending = true;
+    this.superRunPauseTimer = Math.max(this.superRunPauseTimer, 0.3);
+    this.superRunAction = `AGENT RUN — asking ${this.agentBackend}/${this.agentModel} how to handle the ${enemy.kind}.`;
+    this.publishUi(true);
+
+    const state = {
+      player: {
+        x: this.player.x,
+        hearts: this.player.hearts,
+        shoeForm: this.player.shoeForm,
+        gumStomp: this.player.gumStomp,
+        laceLash: this.player.laceLash,
+        ultraMove: this.player.ultraMove,
+        gumStompReady: this.player.gumStomp && this.player.stompCooldown <= 0,
+        laceLashReady: this.player.laceLash && this.player.lashCooldown <= 0,
+        ultraMoveReady: this.player.ultraMove && this.player.ultraCooldown <= 0,
+      },
+      enemy: {
+        kind: enemy.kind,
+        bossTier: enemy.bossTier ?? null,
+        bossName: enemy.bossName ?? null,
+        x: enemy.x,
+      },
+    };
+
+    fetch("/api/agent/decide", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        runId: this.agentRunId,
+        decisionType: "enemyResponse",
+        backend: this.agentBackend,
+        model: this.agentModel,
+        state,
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((response: { choice?: AgentEnemyChoice | null; fallback?: boolean } | null) => {
+        if (this.disposed) return;
+        this.applyAgentEnemyChoice(enemy, response?.choice ?? null, response?.fallback ?? true);
+      })
+      .catch(() => {
+        if (!this.disposed) this.applyAgentEnemyChoice(enemy, null, true);
+      })
+      .finally(() => {
+        this.agentDecisionPending = false;
+      });
+  }
+
+  private applyAgentEnemyChoice(enemy: Enemy, choice: AgentEnemyChoice | null, fallback: boolean) {
+    if (this.disposed || !enemy.alive) return; // A route sweep may have already cleared it while the request was in flight.
+    this.superRunAction = fallback
+      ? "AGENT FALLBACK — no usable reply in time; Right Shoe improvises the scripted response."
+      : `AGENT CHOICE (${this.agentBackend}) — ${choice}.`;
+    this.message = "AGENT RUN: " + this.superRunAction;
+
+    const resolved = choice ?? this.scriptedEnemyChoice(enemy);
+    if (resolved === "gum_stomp" && this.player.gumStomp && this.player.stompCooldown <= 0) this.tryGumStomp();
+    else if (resolved === "lace_lash" && this.player.laceLash && this.player.lashCooldown <= 0) this.tryLaceLash();
+    else if (resolved === "avoid") {
+      /* Agent chose to dodge -- the route's own forward momentum carries Right Shoe past without an attack. */
+    } else this.performSuperKick(enemy);
+
+    this.publishUi(true);
   }
 
   private enterSuperRunStage(stage: number, label: string, checkpoint: string) {
@@ -1701,7 +2167,7 @@ export class GameWorld {
   }
 
   private performSuperKick(enemy: Enemy) {
-    if (!enemy.alive || enemy.bossTier === "boss") return;
+    if (!enemy.alive || enemy.bossTier === "boss" || enemy.gumArmored) return;
     const move = enemy.bossTier === "mini" ? "MINI-BOSS HEEL BREAK" : enemy.kind === "skate" ? "TURBO HEEL KICK" : enemy.kind === "slime" ? "CRESCENT SOLE KICK" : "SOLE-FLIP KICK";
     if (enemy.kind === "skate" && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
     this.superRunKickTimer = 0.72;
@@ -1738,6 +2204,8 @@ export class GameWorld {
     this.player.vx += (targetSpeed - this.player.vx) * Math.min(1, response * delta);
     if (direction !== 0) this.player.facing = direction > 0 ? 1 : -1;
 
+    const wasGrounded = this.player.grounded;
+    const fallSpeedBeforeLanding = this.player.vy;
     const previousBottom = this.player.bottom;
     this.player.vy -= 21.5 * delta;
     this.player.x += this.player.vx * delta;
@@ -1747,17 +2215,35 @@ export class GameWorld {
 
     if (this.player.vy <= 0) {
       for (const platform of this.platforms) {
+        if (platform.crumbled) continue; // vanished: no collision until it respawns
         const overlapX = this.player.x + PLAYER_WIDTH / 2 > platform.x - platform.width / 2 && this.player.x - PLAYER_WIDTH / 2 < platform.x + platform.width / 2;
         const crossedTop = previousBottom >= platform.top - 0.04 && this.player.bottom <= platform.top;
         if (overlapX && crossedTop) {
           this.player.bottom = platform.top;
-          this.player.vy = 0;
-          this.player.grounded = true;
-          this.player.jumpUsed = false;
+          if (platform.special === "bouncePad") {
+            // A real launch, not a landing: grounded stays false and a fresh jump/dash
+            // stays available, same as coming off any other airborne moment.
+            this.player.vy = 15.5;
+            this.player.jumpUsed = false;
+            this.triggerCinematicBeat(0.16, 0.08);
+            this.spawnSparks(platform.x, platform.top + 0.1, CYAN, 18, 3.6);
+            this.audio.playJump();
+          } else {
+            this.player.vy = 0;
+            this.player.grounded = true;
+            this.player.jumpUsed = false;
+            if (platform.special === "crumble" && platform.crumbleTimer === undefined) {
+              platform.crumbleTimer = 0.45;
+            }
+          }
           break;
         }
       }
     }
+    // A real landing is an airborne-to-grounded transition with meaningful downward
+    // speed, not the continuous re-detection that happens every frame a player rests
+    // motionless on a platform (vy stays 0, so it would otherwise "land" every tick).
+    if (!wasGrounded && this.player.grounded && fallSpeedBeforeLanding < -1) this.audio.playLand();
 
     if (this.player.bottom < -8) this.damagePlayer("The laundry chute tossed Right Shoe back.");
 
@@ -1825,18 +2311,23 @@ export class GameWorld {
         }
         continue;
       }
-      enemy.x += enemy.speed * slowFactor * cinematicSlow * delta;
-      if (enemy.x < enemy.minX || enemy.x > enemy.maxX) {
-        enemy.x = Math.max(enemy.minX, Math.min(enemy.maxX, enemy.x));
-        enemy.speed *= -1;
+      if (enemy.kind !== "gumTurret") {
+        enemy.x += enemy.speed * slowFactor * cinematicSlow * delta;
+        if (enemy.x < enemy.minX || enemy.x > enemy.maxX) {
+          enemy.x = Math.max(enemy.minX, Math.min(enemy.maxX, enemy.x));
+          enemy.speed *= -1;
+        }
       }
+      if (enemy.kind === "moth") this.updateMothFlight(enemy, delta, slowFactor * cinematicSlow);
+
       const baseScale = enemy.bossTier === "boss" ? 1.72 : enemy.bossTier === "mini" ? 1.24 : 1;
       const gait = Math.sin(this.titleTime * (enemy.bossTier ? 3.2 : 6.2) + enemy.phase);
-      const hover = enemy.kind === "skate" ? Math.sin(this.titleTime * 3.1 + enemy.phase) * 0.16 : gait * (enemy.bossTier ? 0.045 : 0.075);
-      const squash = enemy.kind === "slime" ? gait * 0.12 : gait * 0.035;
+      const hover = enemy.kind === "skate" ? Math.sin(this.titleTime * 3.1 + enemy.phase) * 0.16 : enemy.kind === "moth" ? 0 : gait * (enemy.bossTier ? 0.045 : 0.075);
+      const wingFlutter = enemy.kind === "moth" ? Math.sin(this.titleTime * (enemy.diving ? 26 : 14) + enemy.phase) * (enemy.diving ? 0.05 : 0.1) : 0;
+      const squash = enemy.kind === "slime" ? gait * 0.12 : enemy.kind === "moth" ? 0 : gait * 0.035;
       enemy.root.position.x = enemy.x;
-      enemy.root.position.y = enemy.bottom + hover;
-      enemy.root.rotation.z = gait * (enemy.kind === "slime" ? 0.12 : enemy.bossTier ? 0.045 : 0.065);
+      enemy.root.position.y = enemy.bottom + hover + wingFlutter;
+      enemy.root.rotation.z = enemy.kind === "moth" ? (enemy.diving ? -enemy.speed * 0.02 : gait * 0.1) : gait * (enemy.kind === "slime" ? 0.12 : enemy.bossTier ? 0.045 : 0.065);
       enemy.root.scaling.x = (enemy.speed < 0 ? -1 : 1) * baseScale * (1 + squash * 0.35);
       enemy.root.scaling.y = baseScale * (1 - squash);
       enemy.root.scaling.z = baseScale * (1 + squash * 0.28);
@@ -1847,10 +2338,47 @@ export class GameWorld {
       const stomp = horizontal && this.player.vy < -1.5 && this.player.bottom <= enemyTop + 0.28 && playerTop >= enemy.bottom;
       const sideHit = horizontal && this.player.bottom < enemyTop - 0.08 && playerTop > enemy.bottom + 0.12;
       if (stomp && enemy.bossTier !== "boss") {
-        this.defeatEnemy(enemy);
+        if (enemy.gumArmored) {
+          // Only tryGumStomp can defeat this one; an ordinary jump-stomp just bounces
+          // off, so the ability keeps a reason to matter when it finally comes up.
+          this.player.vy = Math.max(this.player.vy, 5.4);
+          this.spawnSparks(enemy.x, enemy.bottom + enemy.height * 0.9, MOSS, 8, 2.2);
+          this.message = "Gum Turret shrugs off the stomp -- only Gum Stomp cracks its shell.";
+          this.publishUi(true);
+        } else {
+          this.defeatEnemy(enemy);
+        }
       } else if (sideHit && this.player.dashTimer <= 0 && this.player.formShieldTimer <= 0 && this.player.ultraTimer <= 0) {
-        this.damagePlayer(enemy.kind === "skate" ? "Rogue skate clipped the rescue route." : "A shoe fiend knocked Right Shoe back.");
+        this.damagePlayer(enemy.kind === "skate" ? "Rogue skate clipped the rescue route." : enemy.kind === "moth" ? "A dive-bombing moth clipped Right Shoe." : enemy.kind === "gumTurret" ? "The Gum Turret's sticky wad caught Right Shoe." : "A shoe fiend knocked Right Shoe back.");
       }
+    }
+  }
+
+  /** Drives the Moth's hover-and-dive behavior: it patrols like any other enemy
+   * horizontally (handled by the shared loop above), but its vertical position and
+   * occasional dive toward the player are its own state machine rather than the simple
+   * sine-wave hover every other enemy uses. */
+  private updateMothFlight(enemy: Enemy, delta: number, timeScale: number) {
+    const home = enemy.homeBottom ?? enemy.bottom;
+    enemy.diveTimer = (enemy.diveTimer ?? 2.4) - delta * timeScale;
+    const playerNear = Math.abs(this.player.x - enemy.x) < 6.5;
+    if (!enemy.diving && enemy.diveTimer <= 0) {
+      if (playerNear) {
+        enemy.diving = true;
+        enemy.diveTimer = 0.85;
+      } else {
+        enemy.diveTimer = 0.5;
+      }
+    }
+    if (enemy.diving) {
+      const target = this.player.bottom + 0.25;
+      enemy.bottom += (target - enemy.bottom) * Math.min(1, 6.5 * delta);
+      if (enemy.diveTimer <= 0) {
+        enemy.diving = false;
+        enemy.diveTimer = 2.6 + (Math.abs(enemy.phase) % 2);
+      }
+    } else {
+      enemy.bottom += (home - enemy.bottom) * Math.min(1, 3.4 * delta);
     }
   }
 
@@ -1876,6 +2404,7 @@ export class GameWorld {
         });
         this.message = `Checkpoint stitched: ${checkpoint.label}.`;
         this.spawnSparks(checkpoint.x, -3.1, GOLD, 16, 2.4);
+        this.audio.playCheckpoint();
         this.publishUi(true);
       }
     }
@@ -1971,6 +2500,7 @@ export class GameWorld {
     const burst = enemy.bossTier === "boss" ? VIOLET : enemy.bossTier === "mini" ? RESCUE_CORAL : GOLD;
     this.spawnSparks(enemy.x, enemy.bottom + 0.6, burst, enemy.bossTier === "boss" ? 46 : enemy.bossTier === "mini" ? 28 : 16, enemy.bossTier === "boss" ? 5.4 : enemy.bossTier === "mini" ? 4.2 : 3.1);
     this.spawnImpactRing(enemy.x, enemy.bottom + 0.7, burst, enemy.bossTier === "boss" ? 1.5 : enemy.bossTier === "mini" ? 1.14 : 0.72);
+    this.audio.playStomp(enemy.bossTier);
     this.publishUi(true);
   }
 
@@ -1990,10 +2520,13 @@ export class GameWorld {
     this.player.vy = 5.2;
     this.message = reason;
     this.spawnSparks(this.player.x, this.player.bottom + 0.65, RESCUE_CORAL, 14, 2.6);
+    this.audio.playHit();
     if (this.player.hearts <= 0) {
       this.mode = "lost";
       this.message = "The route tangled. Press restart and try again.";
       this.player.root.setEnabled(false);
+      this.audio.playDefeat();
+      this.audio.stopMusic();
     }
     this.publishUi(true);
   }
@@ -2001,6 +2534,7 @@ export class GameWorld {
   private collectPickup(pickup: Pickup) {
     pickup.collected = true;
     pickup.root.setEnabled(false);
+    this.audio.playCollect(pickup.kind);
     if (pickup.kind === "button") {
       this.buttons += 1;
       this.spawnSparks(pickup.x, pickup.y, GOLD, 5, 1.35);
@@ -2113,7 +2647,49 @@ export class GameWorld {
     this.held.right = false;
     if (this.leftShoeHalo) this.leftShoeHalo.scaling = new Vector3(1.52, 1.52, 1.52);
     this.spawnSparks(62.4, 4.2, RESCUE_CORAL, 46, 4.2);
+    this.audio.playVictory();
+    this.audio.stopMusic();
+    this.recordRunCompletion();
     this.publishUi(true);
+  }
+
+  /** Posts the finished run to the small leaderboard database and always writes a local
+   * best time regardless of whether that post succeeds, so the player's own record is
+   * never at the mercy of the server being reachable. The scripted Super Run demo counts
+   * as an "agent" run here (backend "scripted") since it is not a person actually
+   * playing; only the ordinary human-controlled path records as "human". */
+  private recordRunCompletion() {
+    const seconds = Math.max(0, (Date.now() - this.runStartedAt) / 1000);
+    const mode: "human" | "agent" = this.superRun ? "agent" : "human";
+    const backend = this.isAgentRun ? this.agentBackend : this.superRun ? "scripted" : undefined;
+    const model = this.isAgentRun ? this.agentModel : undefined;
+
+    try {
+      const bestKey = "shoe-adventure:best-time";
+      const previousBest = Number(window.localStorage.getItem(bestKey));
+      if (!Number.isFinite(previousBest) || previousBest <= 0 || seconds < previousBest) {
+        window.localStorage.setItem(bestKey, String(seconds));
+      }
+    } catch {
+      /* localStorage unavailable (private browsing, storage disabled) -- the run still counts, it just isn't remembered locally */
+    }
+
+    fetch("/api/runs/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runId: this.agentRunId,
+        mode,
+        backend,
+        model,
+        seconds,
+        hearts: this.player.hearts,
+        buttons: this.buttons,
+      }),
+    }).catch(() => {
+      /* Best-effort, same as the server's own history writes -- a missing or unreachable
+       * server must never block the win screen the player already earned. */
+    });
   }
 
   private spawnSparks(x: number, y: number, color: Color3, count: number, speed: number) {
@@ -2182,6 +2758,7 @@ export class GameWorld {
       reunionSeconds: Math.ceil(this.reunionTimer),
       contraptionsActivated,
       contraptionStatus,
+      muted: this.audio.isMuted(),
     };
     const signature = JSON.stringify(snapshot);
     if (!force && signature === this.lastUiSignature) return;

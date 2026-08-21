@@ -1,4 +1,3 @@
-import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
@@ -203,7 +202,54 @@ function vitePluginStorageProxy(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), vitePluginStorageProxy()];
+function vitePluginAgentApi(): Plugin {
+  // server/index.ts (the production Express app) never runs under
+  // `pnpm dev` -- only Vite does. Mounting the same agentRouter here means
+  // /api/agent/* works identically in dev and prod instead of only
+  // appearing once a real build exists. See server/agent/router.ts's
+  // module docstring for why an Express Router can be reused this way.
+  //
+  // Important: the router is wrapped in its own tiny express() app rather than handed
+  // straight to server.middlewares.use(). A bare Router() run as plain Connect middleware
+  // never passes through Express's app.handle(), which is the only place res gets
+  // patched with res.json/res.status/etc -- so a directly-mounted Router's res.json is
+  // undefined and every route 500s. Wrapping it in express() restores that patching.
+  return {
+    name: "shoe-adventure-agent-api",
+    async configureServer(server: ViteDevServer) {
+      const express = (await import("express")).default;
+      const { agentRouter } = await import("./server/agent/router");
+      const app = express();
+      app.use("/api/agent", agentRouter);
+      server.middlewares.use(app);
+    },
+  };
+}
+
+function vitePluginRunsApi(): Plugin {
+  // Same reasoning as vitePluginAgentApi above, including the express()-wrapping fix,
+  // for /api/runs/* (see server/runsRouter.ts).
+  return {
+    name: "shoe-adventure-runs-api",
+    async configureServer(server: ViteDevServer) {
+      const express = (await import("express")).default;
+      const { runsRouter } = await import("./server/runsRouter");
+      const app = express();
+      app.use("/api/runs", runsRouter);
+      server.middlewares.use(app);
+    },
+  };
+}
+
+const plugins = [
+  react(),
+  tailwindcss(),
+  vitePluginManusRuntime(),
+  vitePluginManusDebugCollector(),
+  vitePluginStorageProxy(),
+  vitePluginAgentApi(),
+  vitePluginRunsApi(),
+];
 
 export default defineConfig({
   plugins,

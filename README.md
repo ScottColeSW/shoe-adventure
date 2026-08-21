@@ -21,7 +21,11 @@ If the repo were a character, it would be: bright, a little chaotic, and absolut
 - a full-screen action scene with a strong visual identity
 - a rescue mission that reads clearly at a glance
 - collectible buttons, contraptions, and power-up progression
-- a dramatic “AI Super Run” mode that is genuinely fun to watch
+- a full sound pass, jump, land, collect, hit, stomp, checkpoint, and victory cues, plus a two-layer background music bed that gets more intense when an enemy is close
+- a Left Shoe that visually reads as its own character, warm cream and gold, instead of a mirrored copy of the Right Shoe
+- a wider enemy and terrain roster, including a dive-bombing Moth and a Gum Turret that only a Gum Stomp can crack, plus bounce pads and crumbling platforms
+- a best-time and leaderboard system so a run, human or AI, leaves a record behind
+- a dramatic “AI Super Run” mode that is genuinely fun to watch, with an optional real AI model driving enemy encounters
 - a polished, toy-world vibe instead of a generic dashboard look
 
 ## ⚡ Local showcase modes
@@ -31,15 +35,21 @@ This repo does not have a public hosted deployment yet, so the best way to exper
 - `?demo` — auto-driven rescue run showcase
 - `?superrun` — spectacle-focused Super Run preview
 - `?dance` — reunion celebration preview
+- `?agent=ollama&model=<a model you have pulled>` — hands enemy encounters during the Super Run to a real AI model instead of the scripted response; see [`AGENT_PLAY.md`](./AGENT_PLAY.md) for how this works and what backends are supported
 
 Use those URLs after starting the dev server to watch the game’s signature moments without needing a live deployment.
+
+## 🔊 Sound
+
+Every sound effect and both music layers are generated directly in code with the Web Audio API by default, so the game is never silent even with no audio files checked in. Real recorded mp3s can be dropped in to replace any of those placeholders one at a time: save a file under `client/public/audio/` using the exact name the game expects, and it takes over automatically the next time that sound plays. See [`SOUND_LIST.md`](./SOUND_LIST.md) for the full list of expected file names and what each one should sound like. A mute button lives in the game's own HUD.
 
 ## 🕹️ Controls
 
 - `A` / `D` or arrow keys: move
 - `W` / `Space` / Up: jump
 - `Shift` or dash input where available
-- pause and restart through the in-game HUD
+- `Q` Lace Lash, `E` Gum Stomp, `U` Ultra Move, once each is unlocked
+- pause, restart, and mute through the in-game HUD
 
 ## 🧰 Tech stack
 
@@ -55,8 +65,12 @@ Use those URLs after starting the dev server to watch the game’s signature mom
 
 - `client/` — frontend app and game canvas shell
 - `client/src/game/` — world logic, scene setup, and game assets
+- `client/src/game/audio.ts` — sound effects and music, procedural by default, real files optional (see [`SOUND_LIST.md`](./SOUND_LIST.md))
+- `client/public/audio/` — where real recorded sound files go, if you add any
 - `client/src/components/` — UI and game-host components
 - `server/` — Express server entrypoint
+- `server/agent/` — the agent-play "Strategic Director" backend (see [`AGENT_PLAY.md`](./AGENT_PLAY.md))
+- `server/runs.ts`, `server/runsRouter.ts` — run history and the leaderboard API
 - `shared/` — shared constants and cross-cutting values
 - `patches/` — package patch files
 
@@ -106,9 +120,10 @@ pnpm start
 
 ## 🔮 Possible next steps
 
-- richer enemy patterns and more level variety
+- more enemy patterns and level variety beyond the Moth and Gum Turret
 - more power-up combinations and boss interactions
-- stronger audio and animation polish
+- the remaining agent-play backends, llama.cpp and a hosted API, need a real live test; only the Ollama backend has been verified against a running server
+- an in-game settings screen for volume and mute, rather than a single mute button
 - a more formal deploy-ready pipeline
 
 ## License

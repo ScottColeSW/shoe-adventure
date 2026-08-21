@@ -32,6 +32,7 @@ const initialSnapshot: UiSnapshot = {
   reunionSeconds: 0,
   contraptionsActivated: 0,
   contraptionStatus: "NEXT · BUTTON BALL RUN",
+  muted: false,
 };
 
 type Command =
@@ -49,16 +50,49 @@ type Command =
   | "releaseLeft"
   | "releaseRight"
   | "superRun"
-  | "celebrate";
+  | "celebrate"
+  | "muteToggle";
 
 function dispatchCommand(command: Command) {
   window.dispatchEvent(new CustomEvent<Command>("shoe-adventure:command", { detail: command }));
+}
+
+interface LeaderboardEntry {
+  mode: "human" | "agent";
+  backend: string | null;
+  model: string | null;
+  seconds: number;
+}
+
+function formatSeconds(seconds: number): string {
+  return `${seconds.toFixed(1)}s`;
 }
 
 export default function GameCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const startedRef = useRef(false);
   const [snapshot, setSnapshot] = useState<UiSnapshot>(initialSnapshot);
+  const [bestTime, setBestTime] = useState<number | null>(null);
+  const [topRun, setTopRun] = useState<LeaderboardEntry | null>(null);
+
+  // Reads the player's own best time (always available, independent of the server) and
+  // fetches the fastest recorded run overall each time a win happens, so the win screen
+  // can show both without either one blocking the celebration if the server is unreachable.
+  useEffect(() => {
+    if (snapshot.mode !== "won") return;
+    try {
+      const stored = Number(window.localStorage.getItem("shoe-adventure:best-time"));
+      if (Number.isFinite(stored) && stored > 0) setBestTime(stored);
+    } catch {
+      /* localStorage unavailable -- the win screen just won't show a best time */
+    }
+    fetch("/api/runs/leaderboard?limit=1")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { entries?: LeaderboardEntry[] } | null) => setTopRun(data?.entries?.[0] ?? null))
+      .catch(() => {
+        /* Leaderboard is a nice-to-have on the win screen, never required for it to render */
+      });
+  }, [snapshot.mode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -229,6 +263,15 @@ export default function GameCanvas() {
           <button className="hud-pause stitched-panel" type="button" onClick={() => dispatchCommand("pause")} aria-label="Pause game">
             {snapshot.mode === "paused" ? "RESUME" : "PAUSE"}
           </button>
+          <button
+            className="hud-mute stitched-panel"
+            type="button"
+            onClick={() => dispatchCommand("muteToggle")}
+            aria-label={snapshot.muted ? "Unmute sound" : "Mute sound"}
+            aria-pressed={snapshot.muted}
+          >
+            {snapshot.muted ? "MUTED" : "SOUND"}
+          </button>
         </section>
       )}
 
@@ -272,6 +315,19 @@ export default function GameCanvas() {
                 <img src={gameAssets.reunionDance} alt="Right Shoe and Left Shoe dancing together" />
                 <b>THE PAIR DANCE</b>
                 <small>{snapshot.reunionSeconds > 0 ? `DANCE FINALE · ${snapshot.reunionSeconds}s` : "DANCE FINALE · ENCORE"}</small>
+              </div>
+            )}
+            {snapshot.mode === "won" && (bestTime !== null || topRun) && (
+              <div className="run-results" aria-label="Run time results">
+                {bestTime !== null && (
+                  <span className="run-results-best">YOUR BEST <b>{formatSeconds(bestTime)}</b></span>
+                )}
+                {topRun && (
+                  <span className="run-results-top">
+                    FASTEST RECORDED <b>{formatSeconds(topRun.seconds)}</b>
+                    <i>{topRun.mode === "agent" ? `AGENT${topRun.backend ? ` · ${topRun.backend.toUpperCase()}` : ""}` : "HUMAN"}</i>
+                  </span>
+                )}
               </div>
             )}
 
