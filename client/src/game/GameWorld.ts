@@ -7,7 +7,6 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
-import { Texture } from "@babylonjs/core/Materials/Textures/texture";
 import { Scene } from "@babylonjs/core/scene";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera";
 import { Camera } from "@babylonjs/core/Cameras/camera";
@@ -15,7 +14,6 @@ import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { PointLight } from "@babylonjs/core/Lights/pointLight";
 import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
-import { gameAssets } from "./assets";
 import { AudioDirector } from "./audio";
 
 export type GameMode = "title" | "playing" | "paused" | "won" | "lost";
@@ -216,11 +214,6 @@ const TEAL = new Color3(0.05, 0.33, 0.39);
 const GOLD = new Color3(1, 0.67, 0.18);
 const VIOLET = new Color3(0.47, 0.25, 0.72);
 const CYAN = new Color3(0.18, 0.84, 0.92);
-// The Left Shoe reuses the Right Shoe's photographed texture (no distinct render exists
-// yet), so this tint is how the two read as different shoes: it multiplies the shared
-// texture toward the warm cream-and-gold tone REALISM.md originally called for, pulling
-// it away from the Right Shoe's pure Rescue Coral without needing new artwork.
-const LEFT_SHOE_TINT = new Color3(1, 0.86, 0.6);
 const MOSS = new Color3(0.24, 0.63, 0.34);
 
 export class GameWorld {
@@ -284,7 +277,6 @@ export class GameWorld {
   private leftShoe: TransformNode | null = null;
   private leftShoeHalo: Mesh | null = null;
   private heroSprite: Mesh | null = null;
-  private heroSpriteMaterial: StandardMaterial | null = null;
   private heroHalo: Mesh | null = null;
   private onKeyDownBound = (event: KeyboardEvent) => this.onKeyDown(event);
   private onKeyUpBound = (event: KeyboardEvent) => this.onKeyUp(event);
@@ -590,35 +582,27 @@ export class GameWorld {
     return platform;
   }
 
+  /** An invisible animation anchor, not a rendered sprite. This used to carry a
+   * texture pulled from Manus's own hosted storage; now that this project runs
+   * outside the Manus platform that storage is unreachable, so the plane stays
+   * fully transparent and the crafted procedural shoe body (see createPlayer,
+   * createLeftShoe, etc.) is the entire visible character. The plane is kept,
+   * rather than deleted, purely so the existing pose animation (attack squash,
+   * airborne lean, dance beat) still has a node to drive without every call
+   * site needing to change; see updatePlayerPose and the dance-finale beat. */
   private addFootwearBillboard(
     name: string,
-    assetUrl: string,
     root: TransformNode,
     width: number,
     height: number,
     position: Vector3,
-    glowColor: Color3,
-    tintColor: Color3 = Color3.White(),
   ): Mesh {
     const plane = MeshBuilder.CreatePlane(name, { width, height }, this.scene);
     plane.parent = root;
     plane.position = position;
     plane.billboardMode = Mesh.BILLBOARDMODE_ALL;
     plane.isPickable = false;
-
-    const material = new StandardMaterial(`${name}Mat`, this.scene);
-    const texture = new Texture(assetUrl, this.scene);
-    texture.hasAlpha = true;
-    material.diffuseTexture = texture;
-    material.opacityTexture = texture;
-    material.useAlphaFromDiffuseTexture = true;
-    // White is the neutral default (renders the texture unmodified). A non-white tint
-    // multiplies the shared texture toward a different tone -- see LEFT_SHOE_TINT.
-    material.diffuseColor = tintColor;
-    material.emissiveColor = glowColor.scale(0.14);
-    material.specularColor = Color3.Black();
-    material.backFaceCulling = false;
-    plane.material = material;
+    plane.isVisible = false;
     return plane;
   }
 
@@ -663,22 +647,15 @@ export class GameWorld {
     knot.position = new Vector3(-0.36, 0.94, -0.45);
     knot.material = this.createMaterial("rightHeartEyeletMat", GOLD, new Color3(0.56, 0.22, 0.03));
 
-    // Keep the crafted shoe body intentionally visible beneath the sprite so the hero never reads as translucent.
-    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.94; });
+    // The crafted procedural shoe body is the entire visible hero now (see addFootwearBillboard).
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 1; });
     this.heroSprite = this.addFootwearBillboard(
-      "rightShoeRealisticSprite",
-      gameAssets.rightShoeRealistic,
+      "rightShoeAnimAnchor",
       root,
       2.56,
       1.98,
       new Vector3(0.06, 0.9, -0.64),
-      RESCUE_CORAL,
     );
-    this.heroSpriteMaterial = this.heroSprite.material as StandardMaterial;
-    this.heroSpriteMaterial.alpha = 1;
-    this.heroSpriteMaterial.emissiveColor = RESCUE_CORAL.scale(0.22);
-    this.heroSpriteMaterial.specularColor = new Color3(1, 0.96, 0.84);
-    this.heroSpriteMaterial.specularPower = 128;
 
     const halo = MeshBuilder.CreateDisc("rightShoeGlowHalo", { radius: 1.34, tessellation: 40 }, this.scene);
     halo.parent = root;
@@ -894,16 +871,8 @@ export class GameWorld {
     hostileEye.parent = root;
     hostileEye.position = new Vector3(0.22, 0.72, -0.4);
     hostileEye.material = this.createMaterial(`skateEyeMat-${x}`, VIOLET, RESCUE_CORAL);
-    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
-    this.addFootwearBillboard(
-      `rogueSkateRealisticSprite-${x}`,
-      gameAssets.rollerSkateRealistic,
-      root,
-      1.9,
-      1.58,
-      new Vector3(0, 0.82, -0.58),
-      new Color3(0.16, 0.42, 0.88),
-    );
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 1; });
+    this.addFootwearBillboard(`rogueSkateAnimAnchor-${x}`, root, 1.9, 1.58, new Vector3(0, 0.82, -0.58));
     root.position = new Vector3(x, bottom, -0.25);
     return { kind: "skate", root, x, bottom, minX, maxX, speed: 1.08, width: 1.12, height: 1.08, alive: true, phase: x };
   }
@@ -1139,17 +1108,8 @@ export class GameWorld {
     heart.parent = root;
     heart.position = new Vector3(-0.12, 0.72, -0.43);
     heart.material = this.createMaterial("leftHeartMat", RESCUE_CORAL, GOLD);
-    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 0.08; });
-    this.addFootwearBillboard(
-      "leftShoeRealisticSprite",
-      gameAssets.leftShoeRealistic,
-      root,
-      2.22,
-      1.7,
-      new Vector3(-0.03, 0.87, -0.62),
-      GOLD,
-      LEFT_SHOE_TINT,
-    );
+    root.getChildMeshes().forEach((mesh) => { mesh.visibility = 1; });
+    this.addFootwearBillboard("leftShoeAnimAnchor", root, 2.22, 1.7, new Vector3(-0.03, 0.87, -0.62));
     return root;
   }
 
@@ -1267,6 +1227,12 @@ export class GameWorld {
   }
 
   private startSuperRun() {
+    // start()'s own audio.init()/startMusic() only fires from a real click on the
+    // title screen's LACE UP & LEAP button. The title screen's Super Run and Agent
+    // Run buttons are just as real a user gesture, so they need the same call here --
+    // without it those two entry points ran the whole showcase in total silence.
+    this.audio.init();
+    this.audio.startMusic();
     this.mode = "playing";
     this.superRun = true;
     this.runStartedAt = Date.now();
@@ -1440,18 +1406,6 @@ export class GameWorld {
       sneaker: { glow: VIOLET, y: 1.02, z: 1.16 },
     };
     const style = styles[form];
-    const asset = form === "coralChrome" ? gameAssets.rightShoeCoralChrome : form === "moonstep" ? gameAssets.rightShoeMoonstep : gameAssets.rightShoeRealistic;
-    if (this.heroSpriteMaterial) {
-      const texture = new Texture(asset, this.scene);
-      texture.hasAlpha = true;
-      this.heroSpriteMaterial.diffuseTexture = texture;
-      this.heroSpriteMaterial.opacityTexture = texture;
-      this.heroSpriteMaterial.useAlphaFromDiffuseTexture = true;
-      this.heroSpriteMaterial.alpha = 1;
-      this.heroSpriteMaterial.emissiveColor = style.glow.scale(form === "starter" ? 0.22 : 0.38);
-      this.heroSpriteMaterial.specularColor = new Color3(1, 0.95, 0.83);
-      this.heroSpriteMaterial.specularPower = form === "starter" ? 96 : 132;
-    }
     if (this.heroHalo) {
       const material = this.heroHalo.material as StandardMaterial | null;
       if (material) {

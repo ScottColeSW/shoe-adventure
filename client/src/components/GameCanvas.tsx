@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createBestAvailableEngine, createGameScene, type GameHandle, type RenderEngine } from "@/game/scene";
-import { gameAssets } from "@/game/assets";
 import type { UiSnapshot } from "@/game/GameWorld";
 
 const initialSnapshot: UiSnapshot = {
@@ -216,11 +215,6 @@ export default function GameCanvas() {
     if (snapshot.mode === "paused") return "The rescue waits.";
     return "Shoe Adventure";
   }, [snapshot.mode]);
-  const heroArt = snapshot.shoeForm === "moonstep"
-    ? gameAssets.rightShoeMoonstep
-    : snapshot.shoeForm === "coralChrome" || snapshot.mode === "title" || snapshot.mode === "won"
-      ? gameAssets.rightShoeCoralChrome
-      : gameAssets.rightShoeRealistic;
   const heroFormLabel = ({
     starter: "BRIGHT STARTER",
     coralChrome: "CORAL CHROME",
@@ -233,16 +227,7 @@ export default function GameCanvas() {
   } as const)[snapshot.shoeForm];
 
   return (
-    <main
-      className="game-shell"
-      style={
-        {
-          "--target-art": `url(${gameAssets.visualTarget})`,
-          "--backdrop-art": `url(${gameAssets.visualTarget})`,
-        } as React.CSSProperties
-      }
-      aria-label="Shoe Adventure game"
-    >
+    <main className="game-shell" aria-label="Shoe Adventure game">
       <div className="game-backdrop" aria-hidden="true" />
       <canvas ref={canvasRef} className="game-canvas" style={{ touchAction: "none" }} />
 
@@ -251,7 +236,6 @@ export default function GameCanvas() {
         <div className="stage-storyline" aria-hidden="true">
           <div className="stage-box stage-box-left"><span>SHOEBOX CLIFF</span></div>
           <div className="stage-hero-wrap">
-            <img className={`realistic-shoe-mark stage-righty form-${snapshot.shoeForm}`} src={heroArt} alt="" />
             <em>{heroFormLabel}</em>
           </div>
           <div className="stage-lace-route"><i /><i /><i /><i /><i /><i /></div>
@@ -262,7 +246,6 @@ export default function GameCanvas() {
             <span className={snapshot.contraptionsActivated > 3 ? "link-live" : ""}>④ SPOOL LIFT</span>
           </div>
           <div className="stage-rescue-beacon">
-            <img className="realistic-shoe-mark stage-lefty" src={gameAssets.leftShoeRealistic} alt="" />
             <em>LEFTY</em>
             <small>RESCUE BEACON</small>
           </div>
@@ -375,12 +358,10 @@ export default function GameCanvas() {
             {snapshot.mode === "title" && (
               <div className="story-hero-strip" aria-label="Right Shoe begins the rescue route toward Left Shoe">
                 <div className="story-shoe-card story-shoe-card-right">
-                  <img className="realistic-shoe-mark story-righty form-coralChrome" src={heroArt} alt="Bright coral Right Shoe" />
                   <b>RIGHTY <small>SHINE MODE</small></b>
                 </div>
                 <span className="story-rule" />
                 <div className="story-shoe-card story-shoe-card-left">
-                  <img className="realistic-shoe-mark story-lefty" src={gameAssets.leftShoeRealistic} alt="Left Shoe awaiting rescue" />
                   <b>LEFTY <small>RESCUE BEACON</small></b>
                 </div>
               </div>
@@ -388,7 +369,6 @@ export default function GameCanvas() {
             {snapshot.mode === "won" && (
               <div className="reunion-dance" aria-label="Right Shoe and Left Shoe dance together after their rescue">
                 <div className="dance-spark dance-spark-one" /><div className="dance-spark dance-spark-two" /><div className="dance-spark dance-spark-three" />
-                <img src={gameAssets.reunionDance} alt="Right Shoe and Left Shoe dancing together" />
                 <b>THE PAIR DANCE</b>
                 <small>{snapshot.reunionSeconds > 0 ? `DANCE FINALE · ${snapshot.reunionSeconds}s` : "DANCE FINALE · ENCORE"}</small>
               </div>

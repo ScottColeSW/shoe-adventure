@@ -54,7 +54,6 @@ button:focus-visible {
   z-index: 0;
   background:
     linear-gradient(90deg, rgba(2, 7, 22, 0.2), rgba(2, 7, 22, 0.06) 55%, rgba(2, 7, 22, 0.24)),
-    var(--backdrop-art) center / cover no-repeat,
     radial-gradient(circle at 60% 40%, #285a68, #070d22 72%);
   filter: saturate(1.07) contrast(1.04) brightness(0.75);
 }
@@ -700,7 +699,6 @@ button:focus-visible {
 .story-art {
   background:
     linear-gradient(90deg, rgba(5, 12, 35, 0.08), rgba(5, 12, 35, 0.06)),
-    var(--target-art) center / cover no-repeat,
     radial-gradient(circle at 70% 48%, #346f81, #0b1330 67%);
   filter: saturate(1.08) contrast(1.05);
   transform: scale(1.018);

@@ -1,5 +1,7 @@
 # Shoe Adventure — Development Memory
 
+> **2026-08-21 update:** this project no longer runs on the Manus platform. Every `/manus-storage/...` URL mentioned below is historical: the storage proxy, the debug collector, and the runtime plugin that made those URLs resolve have all been removed, and every character and prop is now Babylon.js procedural geometry with no external image dependency. See `ASSETS.md` for the current state. The entries below are kept as a record of what was tried and found at the time, not as current fact.
+
 ## Graphics Platform Decision
 
 The game is a browser-delivered React/Babylon project, so it should remain on **Babylon.js** rather than be rewritten around Unity or Unreal. Unity supports Web builds on 64-bit, WebGL2-capable, HTML5-compliant browsers with WebAssembly support, but adopting it now would replace the game’s existing web project and add a larger build/runtime payload rather than extend the present implementation. [Unity Web browser compatibility](https://docs.unity3d.com/6000.5/Documentation/Manual/webgl-browsercompatibility.html)

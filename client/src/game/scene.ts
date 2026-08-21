@@ -52,7 +52,7 @@ export async function createGameScene(engine: RenderEngine, canvas: HTMLCanvasEl
   scene.imageProcessingConfiguration.contrast = 1.14;
 
   const camera = new FreeCamera("shoeAdventureCamera", new Vector3(0, -0.55, -16), scene);
-  camera.fovMode = Camera.ORTHOGRAPHIC_CAMERA;
+  camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
   camera.minZ = 0.1;
   camera.maxZ = 100;
   camera.setTarget(new Vector3(1.2, -0.4, 0));
