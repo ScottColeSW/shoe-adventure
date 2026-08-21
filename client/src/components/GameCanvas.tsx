@@ -51,7 +51,8 @@ type Command =
   | "releaseRight"
   | "superRun"
   | "celebrate"
-  | "muteToggle";
+  | "muteToggle"
+  | "returnToTitle";
 
 function dispatchCommand(command: Command) {
   window.dispatchEvent(new CustomEvent<Command>("shoe-adventure:command", { detail: command }));
@@ -62,6 +63,7 @@ interface LeaderboardEntry {
   backend: string | null;
   model: string | null;
   seconds: number;
+  hearts: number;
 }
 
 /** Mirrors server/agent/catalog.ts's response shape -- see that file's own
@@ -106,7 +108,7 @@ export default function GameCanvas() {
   const startedRef = useRef(false);
   const [snapshot, setSnapshot] = useState<UiSnapshot>(initialSnapshot);
   const [bestTime, setBestTime] = useState<number | null>(null);
-  const [topRun, setTopRun] = useState<LeaderboardEntry | null>(null);
+  const [topRuns, setTopRuns] = useState<LeaderboardEntry[]>([]);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
@@ -142,8 +144,10 @@ export default function GameCanvas() {
   }, [snapshot.mode]);
 
   // Reads the player's own best time (always available, independent of the server) and
-  // fetches the fastest recorded run overall each time a win happens, so the win screen
+  // fetches a small ranked leaderboard each time a win happens, so the win screen
   // can show both without either one blocking the celebration if the server is unreachable.
+  // A top-5 list, not just a single "fastest", is what actually reads as a scoreboard
+  // multiple models (and humans) can be seen competing on, rather than one number.
   useEffect(() => {
     if (snapshot.mode !== "won") return;
     try {
@@ -152,9 +156,9 @@ export default function GameCanvas() {
     } catch {
       /* localStorage unavailable -- the win screen just won't show a best time */
     }
-    fetch("/api/runs/leaderboard?limit=1")
+    fetch("/api/runs/leaderboard?limit=5")
       .then((response) => (response.ok ? response.json() : null))
-      .then((data: { entries?: LeaderboardEntry[] } | null) => setTopRun(data?.entries?.[0] ?? null))
+      .then((data: { entries?: LeaderboardEntry[] } | null) => setTopRuns(data?.entries ?? []))
       .catch(() => {
         /* Leaderboard is a nice-to-have on the win screen, never required for it to render */
       });
@@ -389,16 +393,25 @@ export default function GameCanvas() {
                 <small>{snapshot.reunionSeconds > 0 ? `DANCE FINALE · ${snapshot.reunionSeconds}s` : "DANCE FINALE · ENCORE"}</small>
               </div>
             )}
-            {snapshot.mode === "won" && (bestTime !== null || topRun) && (
+            {snapshot.mode === "won" && (bestTime !== null || topRuns.length > 0) && (
               <div className="run-results" aria-label="Run time results">
                 {bestTime !== null && (
                   <span className="run-results-best">YOUR BEST <b>{formatSeconds(bestTime)}</b></span>
                 )}
-                {topRun && (
-                  <span className="run-results-top">
-                    FASTEST RECORDED <b>{formatSeconds(topRun.seconds)}</b>
-                    <i>{topRun.mode === "agent" ? `AGENT${topRun.backend ? ` · ${topRun.backend.toUpperCase()}` : ""}` : "HUMAN"}</i>
-                  </span>
+                {topRuns.length > 0 && (
+                  <ol className="run-leaderboard" aria-label="Fastest recorded runs, human and agent">
+                    {topRuns.map((run, index) => (
+                      <li key={`${run.mode}-${run.model ?? run.backend ?? "human"}-${run.seconds}-${index}`}>
+                        <span className="run-leaderboard-rank">{index + 1}</span>
+                        <span className="run-leaderboard-time">{formatSeconds(run.seconds)}</span>
+                        <span className="run-leaderboard-who">{run.mode === "agent" ? (run.model || run.backend || "AGENT").toUpperCase() : "HUMAN"}</span>
+                        <span className="run-leaderboard-hearts" aria-label={`${run.hearts} of 3 hearts remaining`}>
+                          {"♥".repeat(Math.max(0, Math.min(3, run.hearts)))}
+                          {"♡".repeat(Math.max(0, 3 - run.hearts))}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
                 )}
               </div>
             )}
@@ -406,6 +419,12 @@ export default function GameCanvas() {
             <div className="story-actions">
               {snapshot.mode === "title" || snapshot.mode === "paused" ? (
                 <button className="primary-action" type="button" onClick={() => dispatchCommand("start")}>LACE UP &amp; LEAP <span>↗</span></button>
+              ) : snapshot.mode === "lost" && snapshot.agentBackend ? (
+                // A human restarting picks up right where they fell, which makes
+                // sense at a checkpoint they were actually walking. An agent run
+                // has no such continuity to hand back to -- the honest next step
+                // is the picker, not a checkpoint the player never stood at.
+                <button className="primary-action" type="button" onClick={() => dispatchCommand("returnToTitle")}>TRY ANOTHER MODEL <span>↗</span></button>
               ) : (
                 <button className="primary-action" type="button" onClick={() => dispatchCommand("restart")}>STITCH THE ROUTE AGAIN <span>↗</span></button>
               )}
@@ -425,13 +444,16 @@ export default function GameCanvas() {
               {snapshot.mode === "title" && (
                 <button className="secondary-action reunion-preview-action" type="button" onClick={() => dispatchCommand("celebrate")}>WATCH THE PAIR DANCE</button>
               )}
-              {snapshot.mode === "won" && snapshot.superRun && (
+              {snapshot.mode === "won" && snapshot.superRun && !snapshot.agentBackend && (
                 <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>REPLAY SUPER RUN <span>✦</span></button>
+              )}
+              {snapshot.mode === "won" && snapshot.agentBackend && (
+                <button className="super-run-action" type="button" onClick={() => dispatchCommand("returnToTitle")}>TRY ANOTHER MODEL <span>✦</span></button>
               )}
               {snapshot.mode === "won" && (
                 <button className="secondary-action reunion-preview-action" type="button" onClick={() => dispatchCommand("celebrate")}>DANCE AGAIN</button>
               )}
-              {snapshot.mode !== "title" && snapshot.mode !== "won" && (
+              {snapshot.mode !== "title" && snapshot.mode !== "won" && !(snapshot.mode === "lost" && snapshot.agentBackend) && (
                 <button className="secondary-action" type="button" onClick={() => dispatchCommand("restart")}>RESTART FROM CHECKPOINT</button>
               )}
             </div>

@@ -676,8 +676,18 @@ button:focus-visible {
   inset: 0;
   z-index: 20;
   display: grid;
-  align-items: center;
-  overflow: hidden;
+  /* "safe center" (not plain "center"): on a short window the story copy
+     (heading, intro, hero strip, action buttons) can be taller than the
+     viewport. Plain centering would overflow equally off both the top and
+     bottom edges of a hidden-overflow box, silently clipping the START of
+     the content -- including the primary action buttons -- with nothing
+     to scroll to reach them. "safe" falls back to start-alignment instead
+     of clipping the start whenever the content doesn't fit, and pairs
+     with the overflow-y:auto below so the rest becomes reachable by
+     scrolling rather than simply lost. */
+  align-items: safe center;
+  overflow-x: hidden;
+  overflow-y: auto;
   color: #fff7df;
 }
 
@@ -1243,6 +1253,26 @@ kbd {
   .story-copy { width: min(35rem, 77vw); margin-left: 7vw; }
 }
 
+/* A window that isn't maximized, or a smaller laptop display, commonly
+   lands in the 700-820px tall range -- well above the 580px breakpoint
+   below, which was only ever tuned for phones. Without this, the title,
+   win, and lose screens' full-height story copy (heading, intro, hero
+   strip, action buttons, controls guide) routinely ran taller than the
+   actual window at completely ordinary sizes, so the scroll fallback on
+   .story-overlay above was doing all the work. This trims the same kind
+   of things that breakpoint already trims, just less aggressively, so
+   the common case fits without needing to scroll at all. */
+@media (max-height: 820px) {
+  .story-copy { padding: 1.2rem 0 1.2rem 1.2rem; }
+  .story-logo { width: clamp(2.6rem, 4vw, 3.4rem); height: clamp(2.6rem, 4vw, 3.4rem); margin-bottom: 0.75rem; }
+  .story-copy h1 { margin-top: 0.3rem; font-size: clamp(2.2rem, 5.4vw, 4.6rem); }
+  .story-intro { margin-top: 0.7rem; line-height: 1.5; }
+  .story-rescue-stitchline { margin-top: 0.4rem; }
+  .story-hero-strip { min-height: 5.4rem; margin-top: 0.7rem; }
+  .story-actions { margin-top: 0.9rem; }
+  .controls-guide { display: none; }
+}
+
 @media (max-width: 640px), (max-height: 580px) {
   .graphics-badge { display: none; }
   .super-run-ribbon { top: 0.5rem; width: min(21rem, 85vw); padding: 0.45rem 0.56rem; gap: 0.28rem; }
@@ -1380,6 +1410,50 @@ kbd {
   color: #a8f6ff;
   font-size: 0.34rem;
   letter-spacing: 0.12em;
+}
+
+.run-leaderboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.24rem;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-leaderboard li {
+  display: grid;
+  grid-template-columns: 1rem auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.14rem 0;
+}
+
+.run-leaderboard-rank {
+  color: rgba(216, 230, 255, 0.55);
+  font-size: 0.36rem;
+}
+
+.run-leaderboard-time {
+  color: #fff4d7;
+  font-size: 0.5rem;
+  letter-spacing: 0.04em;
+}
+
+.run-leaderboard-who {
+  overflow: hidden;
+  color: #a8f6ff;
+  font-size: 0.34rem;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-leaderboard-hearts {
+  color: #ff8f86;
+  font-size: 0.38rem;
+  letter-spacing: 0.06em;
 }
 
  @media (max-width: 640px), (max-height: 580px) {

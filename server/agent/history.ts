@@ -39,6 +39,15 @@ function getDb(): Database.Database {
   return db;
 }
 
+/** Opens the database and runs its CREATE TABLE IF NOT EXISTS -- the exact
+ * same first-use path every real request already takes through getDb()
+ * above, just callable standalone so scripts/check-env.ts can surface a
+ * bad db path (see agentConfig.dbPath's own comment) as a clear one-line
+ * failure instead of a stack trace the first time a real request hits it. */
+export function ensureReady(): void {
+  getDb();
+}
+
 export function recordDecision(record: DecisionRecord): void {
   // History is best-effort observability, never load-bearing -- a write
   // failure (disk full, locked file) must not take down a live decision
@@ -65,11 +74,19 @@ export interface BackendModelStats {
 }
 
 export function getStats(): { totalDecisions: number; byBackendModel: BackendModelStats[] } {
-  const rows = getDb()
-    .prepare(
-      `SELECT backend, model, choice, fallback, outcome, latency_ms as latencyMs FROM decisions`,
-    )
-    .all() as Array<{ backend: string; model: string; fallback: number; outcome: string; latencyMs: number }>;
+  // Same best-effort discipline as recordDecision above: a read failure
+  // here must return an empty stats shape, never crash the dev server.
+  let rows: Array<{ backend: string; model: string; fallback: number; outcome: string; latencyMs: number }>;
+  try {
+    rows = getDb()
+      .prepare(
+        `SELECT backend, model, choice, fallback, outcome, latency_ms as latencyMs FROM decisions`,
+      )
+      .all() as Array<{ backend: string; model: string; fallback: number; outcome: string; latencyMs: number }>;
+  } catch (error) {
+    console.error(JSON.stringify({ event: "agent_history_read_failed", error: String(error) }));
+    return { totalDecisions: 0, byBackendModel: [] };
+  }
 
   const groups = new Map<string, typeof rows>();
   for (const row of rows) {

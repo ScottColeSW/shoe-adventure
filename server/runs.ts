@@ -37,6 +37,16 @@ function getDb(): Database.Database {
   return db;
 }
 
+/** Same standalone-openable helper as server/agent/history.ts's own
+ * ensureReady() -- see that one's comment. Both modules resolve
+ * agentConfig.dbPath independently but point at the same underlying file,
+ * so checking either one here would do, this one is checked too only so
+ * scripts/check-env.ts reads as a complete preflight rather than a partial
+ * one. */
+export function ensureReady(): void {
+  getDb();
+}
+
 export function recordRun(record: RunRecord): void {
   // Same best-effort discipline as server/agent/history.ts's recordDecision: a completed
   // run must never fail to reach the player's win screen just because this write failed.
@@ -57,15 +67,23 @@ export interface LeaderboardEntry {
   backend: string | null;
   model: string | null;
   seconds: number;
+  hearts: number;
   createdAt: string;
 }
 
 export function getLeaderboard(limit: number): LeaderboardEntry[] {
-  const rows = getDb()
-    .prepare(
-      `SELECT mode, backend, model, seconds, created_at as createdAt
-       FROM runs ORDER BY seconds ASC LIMIT @limit`,
-    )
-    .all({ limit }) as LeaderboardEntry[];
-  return rows;
+  // Same best-effort discipline as recordRun above: a read failure here
+  // (a bad db path, a locked file) must show an empty leaderboard, never
+  // crash the whole dev server out from under whoever is mid-run.
+  try {
+    return getDb()
+      .prepare(
+        `SELECT mode, backend, model, seconds, hearts, created_at as createdAt
+         FROM runs ORDER BY seconds ASC LIMIT @limit`,
+      )
+      .all({ limit }) as LeaderboardEntry[];
+  } catch (error) {
+    console.error(JSON.stringify({ event: "run_leaderboard_read_failed", error: String(error) }));
+    return [];
+  }
 }

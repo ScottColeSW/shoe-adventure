@@ -111,6 +111,7 @@ pnpm start
 - `pnpm start` — serve the production build
 - `pnpm preview` — preview the built frontend locally
 - `pnpm check` — run TypeScript type checking
+- `pnpm check-env` — preflight check: confirms the decision/run history database can actually open on this machine, and reports whether Ollama is reachable. Optional, but worth running once before your first `pnpm dev` (mirrors Dominion's own `check_env.py`)
 - `pnpm format` — format the workspace with Prettier
 
 ## 🪡 Notes

@@ -60,7 +60,8 @@ type GameCommand =
   | "releaseRight"
   | "superRun"
   | "celebrate"
-  | "muteToggle";
+  | "muteToggle"
+  | "returnToTitle";
 
 interface Platform {
   x: number;
@@ -1213,6 +1214,7 @@ export class GameWorld {
     if (command === "holdRight") this.held.right = true;
     if (command === "superRun") this.startSuperRun();
     if (command === "celebrate") this.previewReunion();
+    if (command === "returnToTitle") this.returnToTitle();
     if (command === "muteToggle") {
       this.audio.toggleMute();
       this.publishUi(true);
@@ -1353,6 +1355,23 @@ export class GameWorld {
     this.agentDecisionPending = false;
     this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
     this.message = "AGENT RUN: " + this.superRunAction;
+    this.publishUi(true);
+  }
+
+  /** The win and lost screens' "TRY ANOTHER MODEL" action (see GameCanvas.tsx),
+   * only shown after a real agent run -- lets a player line up a different
+   * model on the picker without a full page reload. Only mode itself needs
+   * resetting here: the next startAgentRun() call runs through
+   * startSuperRun()'s own full reset (position, hearts, enemies, pickups,
+   * checkpoints, contraptions), so there is nothing else this needs to undo. */
+  private returnToTitle() {
+    if (this.mode !== "won" && this.mode !== "lost") return;
+    this.mode = "title";
+    this.superRun = false;
+    this.isAgentRun = false;
+    this.superRunAction = "AI standing by.";
+    this.reunionTimer = 0;
+    this.audio.stopMusic();
     this.publishUi(true);
   }
 
@@ -2536,7 +2555,14 @@ export class GameWorld {
 
   private damagePlayer(reason: string) {
     if (this.player.invulnerable > 0 || this.mode !== "playing") return;
-    if (this.superRun) {
+    // The scripted Super Run preview (no real model behind it, see
+    // recordRunCompletion) keeps the old harmless absorb: it's a canned
+    // showcase, not a competitor. A genuine agent run (isAgentRun) is the
+    // opposite case on purpose -- if a wrong or premature tactic can never
+    // actually cost anything, every model looks identical to a viewer and
+    // the leaderboard can't tell a good one from a bad one. Same real-hit
+    // path as a human run below, just with agent-flavored messaging.
+    if (this.superRun && !this.isAgentRun) {
       this.player.invulnerable = 0.85;
       this.superRunAction = "AI RECOVERY — lace barrier absorbed the hit.";
       this.message = `AI SUPER RUN: ${this.superRunAction}`;
@@ -2548,12 +2574,18 @@ export class GameWorld {
     this.player.invulnerable = 1.35;
     this.player.vx = -this.player.facing * 7.8;
     this.player.vy = 5.2;
-    this.message = reason;
+    this.message = this.isAgentRun ? `AGENT RUN: ${reason}` : reason;
     this.spawnSparks(this.player.x, this.player.bottom + 0.65, RESCUE_CORAL, 14, 2.6);
     this.audio.playHit();
+    if (this.isAgentRun && this.player.hearts > 0) {
+      this.superRunAction = `AGENT TAKES A HIT — ${this.agentBackend}/${this.agentModel} is down to ${this.player.hearts} heart${this.player.hearts === 1 ? "" : "s"}.`;
+    }
     if (this.player.hearts <= 0) {
       this.mode = "lost";
-      this.message = "The route tangled. Press restart and try again.";
+      this.message = this.isAgentRun
+        ? `${this.agentBackend}/${this.agentModel} couldn't make it. Try another model, or take the route yourself.`
+        : "The route tangled. Press restart and try again.";
+      if (this.isAgentRun) this.superRunAction = `AGENT DOWN — ${this.agentBackend}/${this.agentModel} ran out of route integrity.`;
       this.player.root.setEnabled(false);
       this.audio.playDefeat();
       this.audio.stopMusic();
@@ -2689,9 +2721,17 @@ export class GameWorld {
    * as an "agent" run here (backend "scripted") since it is not a person actually
    * playing; only the ordinary human-controlled path records as "human". */
   private recordRunCompletion() {
+    // The scripted Super Run preview (superRun with no real model behind
+    // it) isn't a genuine attempt by anyone: it always takes the same
+    // route, at the same pace, and could never actually fail (see
+    // damagePlayer). Recording it would let a canned demo occupy real
+    // spots on the "agents competing" leaderboard, and would inflate the
+    // player's own best time with a run they didn't play. Only a real
+    // human playthrough or a real agent run (isAgentRun) counts.
+    if (this.superRun && !this.isAgentRun) return;
     const seconds = Math.max(0, (Date.now() - this.runStartedAt) / 1000);
     const mode: "human" | "agent" = this.superRun ? "agent" : "human";
-    const backend = this.isAgentRun ? this.agentBackend : this.superRun ? "scripted" : undefined;
+    const backend = this.isAgentRun ? this.agentBackend : undefined;
     const model = this.isAgentRun ? this.agentModel : undefined;
 
     try {
