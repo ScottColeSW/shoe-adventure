@@ -22,6 +22,8 @@ Plain mp3 files. Short sounds should be quick, well under a second in most cases
 
 **collect-powerup.mp3** - A small triumphant flourish for picking up an ability or a shoe-form transformation, such as the Moon Step or Coral Chrome forms. This one should feel like a little celebration, a short rising phrase rather than a single note. About a third of a second.
 
+**collect-big.mp3** - A bigger, "boom" flourish for shoe-form transformations and major ability unlocks (Ultra Move, Lace Lash, Gum Stomp, Super Jump, Moon Insole, and every shoe-form pickup). This is the one that should make a big pickup impossible to miss: a satisfying thump under a short rising musical stack, punchier and a touch longer than collect-powerup.mp3. About half a second.
+
 **hit.mp3** - A sound for the moment the player takes damage from an enemy. Should read as an impact without being harsh or scary, this is a family-friendly game. About a sixth of a second.
 
 **stomp.mp3** - The sound of defeating an ordinary enemy with a stomp. Quick, satisfying, a bit cartoonish. About a sixth of a second.

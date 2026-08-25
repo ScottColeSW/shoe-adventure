@@ -79,6 +79,42 @@ button:focus-visible {
   mix-blend-mode: multiply;
 }
 
+/* A harder-hitting beat than the softer "The route tangled" retry screen underneath --
+   deliberately harsher palette (near-black, blood-coral) and a blunt impact-in, not the
+   game's usual warm cream/gold register. Fires once per loss, see GameCanvas.tsx. */
+.game-over-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(40, 4, 6, 0.94), rgba(4, 2, 4, 0.98));
+  animation: game-over-fade 1.1s ease-in forwards;
+}
+
+.game-over-splash span {
+  color: #ff5a4f;
+  font-family: "Fraunces", Georgia, serif;
+  font-weight: 700;
+  font-size: clamp(3.2rem, 11vw, 7.5rem);
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 40px rgba(255, 90, 79, 0.65), 0 6px 0 #1a0203;
+  animation: game-over-punch 0.4s cubic-bezier(0.16, 1.4, 0.4, 1) both;
+}
+
+@keyframes game-over-punch {
+  0% { transform: scale(2.2) rotate(-3deg); opacity: 0; }
+  60% { transform: scale(0.94) rotate(1deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes game-over-fade {
+  0% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .stage-storyline {
   position: fixed;
   inset: 0;
@@ -292,7 +328,7 @@ button:focus-visible {
   top: 1rem;
   left: 50%;
   display: grid;
-  grid-template-columns: auto 1fr auto auto auto auto;
+  grid-template-columns: auto auto 1fr auto auto auto auto;
   align-items: center;
   gap: 0.45rem;
   width: min(34rem, 60vw);
@@ -322,6 +358,146 @@ button:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.agent-activity-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  font-size: 0.62rem;
+  line-height: 1;
+  color: #0a1220;
+  background: #9be8ff;
+  box-shadow: 0 0 8px rgba(155, 232, 255, 0.6);
+}
+.agent-activity-icon.agent-activity-attacking { background: #ff5a4f; box-shadow: 0 0 9px rgba(255, 90, 79, 0.7); }
+.agent-activity-icon.agent-activity-targeting { background: #caa5ff; box-shadow: 0 0 9px rgba(202, 165, 255, 0.7); }
+.agent-activity-icon.agent-activity-usingUltra { background: #ffe083; box-shadow: 0 0 10px rgba(255, 224, 131, 0.8); }
+.agent-activity-icon.agent-activity-dodging { background: #7ee0a8; box-shadow: 0 0 8px rgba(126, 224, 168, 0.6); }
+.agent-activity-icon.agent-activity-fallback { background: #ffb579; box-shadow: 0 0 8px rgba(255, 181, 121, 0.6); }
+.agent-activity-icon.agent-activity-thinking { background: #cfd6e6; animation: agent-thinking-pulse 1s ease-in-out infinite; }
+.agent-activity-icon.agent-activity-idle { background: #8ea0c2; }
+
+@keyframes agent-thinking-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+.agent-log-panel {
+  position: fixed;
+  z-index: 13;
+  top: 50%;
+  right: 1rem;
+  transform: translateY(-50%);
+  width: min(19rem, 26vw);
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px dashed rgba(255, 224, 144, 0.5);
+  border-radius: 0.4rem;
+  background: rgba(5, 13, 33, 0.78);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.agent-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px dashed rgba(255, 224, 144, 0.35);
+}
+.agent-log-header span { color: #ffcf63; font-size: 0.44rem; font-weight: 700; letter-spacing: 0.14em; }
+.agent-log-header em { overflow: hidden; color: #9be8ff; font-size: 0.4rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+
+.agent-log-body {
+  overflow-y: auto;
+  padding: 0.4rem 0.55rem;
+  font-family: "DM Mono", monospace;
+}
+.agent-log-line {
+  padding: 0.16rem 0;
+  color: rgba(255, 245, 221, 0.82);
+  font-size: 0.42rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.agent-log-line:not(:last-child) { border-bottom: 1px solid rgba(255, 245, 221, 0.08); }
+.agent-log-empty { color: rgba(255, 245, 221, 0.45); font-style: italic; }
+
+.pickup-splash {
+  --tilt: -4deg;
+  position: fixed;
+  z-index: 20;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(var(--tilt));
+  padding: 0.85rem 1.7rem;
+  color: #fff8e2;
+  font-family: "Fraunces", serif;
+  font-size: clamp(1.5rem, 4.6vw, 2.9rem);
+  font-weight: 700;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 14px rgba(255, 90, 79, 0.8), 0 2px 0 rgba(0, 0, 0, 0.4);
+  background: radial-gradient(120% 140% at 30% 20%, rgba(255, 138, 120, 0.92), rgba(255, 90, 79, 0.88) 55%, rgba(191, 46, 40, 0.92) 100%);
+  border: 0.22rem solid rgba(255, 245, 221, 0.92);
+  border-radius: 2.4rem 2.6rem 2.2rem 2.5rem / 3rem 2.4rem 3.2rem 2.6rem;
+  box-shadow: 0 14px 0 rgba(0, 0, 0, 0.22), 0 18px 34px rgba(0, 0, 0, 0.4), inset 0 2px 0 rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@keyframes pickup-splash-pop {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.3) rotate(calc(var(--tilt) * 2.4)); }
+  16% { opacity: 1; transform: translate(-50%, -50%) scale(1.22) rotate(calc(var(--tilt) * -1.2)); }
+  32% { transform: translate(-50%, -50%) scale(0.96) rotate(calc(var(--tilt) * 0.7)); }
+  46% { transform: translate(-50%, -50%) scale(1.04) rotate(var(--tilt)); }
+  75% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(var(--tilt)); }
+  100% { opacity: 0; transform: translate(-50%, -54%) scale(1.08) rotate(var(--tilt)); }
+}
+
+/* Punchier comic-book onomatopoeia pop for landed hits (see GameWorld.showComicPop) --
+   high-contrast yellow/white instead of the pickup bubble's coral, a jagged starburst
+   silhouette instead of a rounded blob, and a much snappier timeline (0.7s, matched to
+   popupTimer's shorter duration for this variant) since it needs to land right on the
+   beat of a brief hit-stop rather than linger like a pickup celebration. */
+.pickup-splash--impact {
+  padding: 0.6rem 1.3rem;
+  background: radial-gradient(120% 140% at 35% 25%, #fff6c8 0%, #ffd23f 45%, #ff9f1c 100%);
+  border: 0.24rem solid #1a1206;
+  border-radius: 0.6rem 1.8rem 0.6rem 1.8rem / 1.8rem 0.6rem 1.8rem 0.6rem;
+  color: #241605;
+  text-shadow: none;
+  -webkit-text-stroke: 0.02em rgba(36, 22, 5, 0.4);
+  box-shadow: 0 0 0 0.1rem #1a1206, 0 10px 0 rgba(0, 0, 0, 0.28), 0 16px 30px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes pickup-splash-pop-impact {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.15) rotate(calc(var(--tilt) * 3)); }
+  22% { opacity: 1; transform: translate(-50%, -50%) scale(1.35) rotate(var(--tilt)); }
+  40% { transform: translate(-50%, -50%) scale(1) rotate(var(--tilt)); }
+  70% { opacity: 1; transform: translate(-50%, -50%) scale(1.05) rotate(var(--tilt)); }
+  100% { opacity: 0; transform: translate(-50%, -58%) scale(0.92) rotate(var(--tilt)); }
+}
+
+.level-badge {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0.28rem 0;
+  padding: 0.18rem 0.4rem;
+  border: 1px dashed rgba(126, 224, 255, 0.5);
+  border-radius: 0.3rem;
+  background: rgba(15, 47, 69, 0.4);
+  width: fit-content;
+}
+.level-badge span { color: #9be8ff; font-size: 0.5rem; font-weight: 700; letter-spacing: 0.12em; }
+.level-badge b { color: #fff5dd; font-size: 0.5rem; font-weight: 500; }
 
 .agent-chip {
   overflow: hidden;
@@ -420,21 +596,38 @@ button:focus-visible {
   margin-top: 0.56rem;
 }
 
-.rescue-meter span {
-  display: block;
-  width: 100%;
-  height: 0.28rem;
-  overflow: hidden;
-  border: 1px solid rgba(255, 226, 160, 0.42);
-  background: rgba(255, 245, 221, 0.09);
+/* A discrete zone map (one segment per level) rather than one smooth fill bar -- the
+   old continuous bar never actually showed which zone the player is in or which are
+   already cleared, only an overall percentage. */
+.rescue-meter-zones {
+  display: flex;
+  gap: 0.22rem;
 }
 
-.rescue-meter i {
+.rescue-meter-zone {
   display: block;
-  height: 100%;
-  background: repeating-linear-gradient(90deg, #ff5a4f 0 0.55rem, #ffcf63 0.55rem 0.84rem);
-  box-shadow: 0 0 10px rgba(255, 90, 79, 0.72);
-  transition: width 260ms cubic-bezier(0.23, 1, 0.32, 1);
+  flex: 1;
+  height: 0.32rem;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 226, 160, 0.42);
+  background: rgba(255, 245, 221, 0.09);
+  transition: background 260ms ease, box-shadow 260ms ease, transform 260ms ease;
+}
+
+.rescue-meter-zone--done {
+  background: repeating-linear-gradient(90deg, #ff5a4f 0 0.4rem, #ffcf63 0.4rem 0.62rem);
+  border-color: rgba(255, 207, 99, 0.7);
+}
+
+.rescue-meter-zone--current {
+  background: #ffcf63;
+  border-color: #fff5dd;
+  box-shadow: 0 0 10px rgba(255, 207, 99, 0.85);
+  transform: scaleY(1.35);
+}
+
+.rescue-meter-zone--upcoming {
+  opacity: 0.55;
 }
 
 .rescue-meter b {
@@ -635,12 +828,17 @@ button:focus-visible {
   text-shadow: 0 0 13px rgba(255, 90, 79, 0.64);
 }
 
+.lives-score,
 .button-score {
   padding-left: 0.65rem;
   border-left: 1px solid rgba(255, 245, 221, 0.22);
   color: #ffd77c;
   font-size: 0.58rem;
   letter-spacing: 0.08em;
+}
+
+.lives-score {
+  color: #a8f6ff;
 }
 
 .hud-pause {
@@ -1008,10 +1206,14 @@ button:focus-visible {
   box-shadow: 0 0 10px rgba(255, 90, 79, 0.44);
 }
 
+/* Marks Right Shoe's position on the route between the two shoe cards -- was hardcoded
+   to the LEFTY (right) end regardless of state, which read as "the rescue is already
+   basically done" on a title screen that, by definition, hasn't started yet. Belongs at
+   the RIGHTY (left) end instead: the journey is just beginning. */
 .story-rule::after {
   position: absolute;
   top: -0.33rem;
-  right: -0.1rem;
+  left: -0.1rem;
   width: 0.6rem;
   height: 0.6rem;
   border: 1px solid #ffcf63;
@@ -1059,6 +1261,13 @@ button:focus-visible {
   border: 1px dashed rgba(255, 235, 193, 0.48);
   background: rgba(7, 16, 37, 0.58);
 }
+
+.quit-action {
+  color: rgba(255, 235, 221, 0.62);
+  border-color: rgba(255, 235, 221, 0.28);
+  background: rgba(7, 16, 37, 0.4);
+}
+.quit-action:hover { color: #fff5dd; background: rgba(255, 90, 79, 0.16); border-color: rgba(255, 90, 79, 0.4); }
 
 .super-run-action {
   border: 1px solid rgba(151, 242, 255, 0.72);
@@ -1148,16 +1357,72 @@ button:focus-visible {
   font-size: 0.54rem;
 }
 
-.agent-picker-confirm {
+.agent-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
   margin-top: 0.6rem;
+}
+
+.agent-picker-confirm {
   padding: 0.6rem 0.85rem;
   font-size: 0.58rem;
 }
 
-.agent-picker-confirm:disabled {
+.agent-picker-confirm:disabled,
+.agent-picker-repeat:disabled {
   cursor: default;
   opacity: 0.45;
 }
+
+/* A secondary, quieter action next to the primary START button -- bulk-testing isn't
+   the common path, so it shouldn't compete visually with it. */
+.agent-picker-repeat {
+  padding: 0.6rem 0.7rem;
+  font-size: 0.54rem;
+  background: rgba(126, 224, 255, 0.08);
+  border: 1px solid rgba(126, 224, 255, 0.4);
+  color: #9be8ff;
+}
+
+.agent-picker-repeat:hover:not(:disabled) {
+  background: rgba(126, 224, 255, 0.16);
+}
+
+.auto-repeat-chip {
+  position: fixed;
+  top: 3.4rem;
+  right: 1.1rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid rgba(255, 207, 99, 0.55);
+  border-radius: 0.4rem;
+  background: rgba(10, 22, 46, 0.88);
+  backdrop-filter: blur(4px);
+  color: #ffd77c;
+  font-size: 0.5rem;
+  letter-spacing: 0.06em;
+  pointer-events: auto;
+}
+
+.auto-repeat-chip b { color: #fff5dd; font-size: 0.56rem; }
+.auto-repeat-chip i { color: rgba(255, 245, 221, 0.6); font-style: normal; }
+
+.auto-repeat-chip button {
+  padding: 0.22rem 0.45rem;
+  border: 1px solid rgba(255, 90, 79, 0.6);
+  border-radius: 0.3rem;
+  background: rgba(255, 90, 79, 0.16);
+  color: #ffb0a8;
+  font-size: 0.46rem;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.auto-repeat-chip button:hover { background: rgba(255, 90, 79, 0.3); }
 
 .controls-guide {
   display: flex;
@@ -1309,6 +1574,7 @@ kbd {
   .super-run-action { padding: 0.74rem 0.78rem; font-size: 0.56rem; }
   .game-hud { transform: scale(0.88); transform-origin: top left; width: 113.64%; height: 113.64%; }
   .hud-powerups { display: none; }
+  .agent-log-panel { display: none; }
   .touch-controls { display: flex; }
   .hud-lives { bottom: 4.5rem; }
   .hud-pause { bottom: 4.5rem; }
@@ -1329,14 +1595,107 @@ kbd {
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
-.reunion-dance img {
+.reunion-shoes {
   position: relative;
   z-index: 1;
-  width: min(23rem, 68vw);
-  max-height: 10.5rem;
-  object-fit: contain;
-  filter: brightness(1.18) saturate(1.12) drop-shadow(0 10px 13px rgba(0, 0, 0, 0.36));
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.9rem;
+  width: 100%;
 }
+
+/* A side-profile sneaker silhouette built to match the real in-game hero shoe's own
+   shapes (see GameWorld.ts's createPlayer/createLeftShoe: cream sole, rounded upper body,
+   a heel block behind it, a tongue peeking up at the collar, three diagonal laces) rather
+   than an abstract badge -- this is their closeup finale, so it should read as the same
+   shoe, just posed for a bow. Both shoes face right by default (toe at 100%); the left
+   shoe is mirrored so the pair faces each other. */
+.reunion-shoe {
+  position: relative;
+  width: clamp(4.6rem, 11vw, 6.6rem);
+  height: clamp(3rem, 7.2vw, 4.3rem);
+  filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.32));
+}
+
+.reunion-shoe-sole {
+  position: absolute;
+  left: 4%;
+  bottom: 0;
+  width: 92%;
+  height: 20%;
+  border-radius: 20% 40% 45% 25%;
+  background: #fff5dd;
+}
+
+.reunion-shoe-heel {
+  position: absolute;
+  left: 0;
+  bottom: 14%;
+  width: 24%;
+  height: 62%;
+  border-radius: 38% 18% 12% 22%;
+}
+
+.reunion-shoe-upper {
+  position: absolute;
+  left: 14%;
+  bottom: 16%;
+  width: 82%;
+  height: 68%;
+  border-radius: 62% 78% 34% 42% / 68% 82% 30% 40%;
+}
+
+.reunion-shoe-tongue {
+  position: absolute;
+  left: 40%;
+  top: 2%;
+  width: 22%;
+  height: 34%;
+  border-radius: 40% 40% 8% 8%;
+  background: #fff5dd;
+}
+
+.reunion-shoe-lace {
+  position: absolute;
+  left: 34%;
+  top: 40%;
+  width: 46%;
+  height: 9%;
+  background: #fff5dd;
+  border-radius: 2px;
+  transform: rotate(-24deg);
+}
+
+.reunion-shoe-lace:nth-child(6) { top: 52%; transform: rotate(-22deg); }
+.reunion-shoe-lace:nth-child(7) { top: 64%; left: 38%; width: 40%; transform: rotate(-19deg); }
+
+.reunion-shoe-heart {
+  position: absolute;
+  left: 46%;
+  top: 34%;
+  width: 12%;
+  height: 16%;
+  border-radius: 50%;
+  background: #ff5a4f;
+  box-shadow: 0 0 6px rgba(255, 90, 79, 0.7);
+}
+
+/* Right Shoe: Rescue Coral upper, matching rightUpperMat/rightHeelMat in GameWorld.ts. */
+.reunion-shoe-right .reunion-shoe-upper { background: #ff5a4f; }
+.reunion-shoe-right .reunion-shoe-heel { background: #e24a40; }
+
+/* Left Shoe: warm cream-and-gold upper, matching leftUpperMat -- deliberately not Rescue
+   Coral, the same differentiation GameWorld.ts's own comment calls out. Mirrored so the
+   pair faces each other. */
+.reunion-shoe-left {
+  transform: scaleX(-1);
+}
+.reunion-shoe-left .reunion-shoe-upper { background: #ffdb99; }
+.reunion-shoe-left .reunion-shoe-heel { background: #f0c374; }
+
+.reunion-shoe-right { transform: rotate(-4deg); }
+.reunion-shoe-left { transform: scaleX(-1) rotate(-4deg); }
 
 .reunion-dance b {
   position: absolute;
@@ -1456,7 +1815,7 @@ kbd {
 
  @media (max-width: 640px), (max-height: 580px) {
   .reunion-dance { width: min(23rem, 84vw); min-height: 9.5rem; margin-top: 0.7rem; }
-  .reunion-dance img { max-height: 7.8rem; width: min(20rem, 74vw); }
+  .reunion-shoe { width: clamp(2.7rem, 12vw, 3.9rem); height: clamp(2.7rem, 12vw, 3.9rem); }
   .reunion-dance b { font-size: 0.43rem; }
   .story-hero-strip { width: min(25rem, 94%); min-height: 6.1rem; margin-top: 0.8rem; }
   .story-shoe-card { min-width: 5.85rem; padding: 0.18rem 0.22rem 0.3rem; }
@@ -1472,8 +1831,11 @@ kbd {
   .story-logo { animation: logo-breathe 2.8s ease-in-out infinite; }
   .graphics-badge { animation: badge-pulse 3.2s ease-in-out infinite; }
   .super-run-ribbon { animation: super-run-signal 1.7s ease-in-out infinite; }
-  .reunion-dance img { animation: pair-dance 1.15s cubic-bezier(0.77, 0, 0.175, 1) infinite alternate; }
+  .reunion-shoe-right { animation: pair-dance 1.15s cubic-bezier(0.77, 0, 0.175, 1) infinite alternate; }
+  .reunion-shoe-left { animation: pair-dance-mirror 1.15s cubic-bezier(0.77, 0, 0.175, 1) infinite alternate; }
   .dance-spark { animation: dance-sparkle 1.3s ease-in-out infinite alternate; }
+  .pickup-splash { animation: pickup-splash-pop 1.15s cubic-bezier(0.2, 0.9, 0.3, 1) forwards; }
+  .pickup-splash--impact { animation: pickup-splash-pop-impact 0.7s cubic-bezier(0.15, 0.9, 0.25, 1) forwards; }
   .dance-spark-two { animation-delay: 0.28s; }
   .dance-spark-three { animation-delay: 0.56s; }
 }
@@ -1504,8 +1866,13 @@ kbd {
 }
 
 @keyframes pair-dance {
-  0% { transform: translateX(-5px) rotate(-2deg) scale(1); }
-  100% { transform: translateX(6px) rotate(2deg) scale(1.035); }
+  0% { transform: translateX(-4px) rotate(-13deg) scale(1); }
+  100% { transform: translateX(5px) rotate(-5deg) scale(1.035); }
+}
+
+@keyframes pair-dance-mirror {
+  0% { transform: translateX(4px) rotate(13deg) scaleX(-1) scale(1); }
+  100% { transform: translateX(-5px) rotate(5deg) scaleX(-1) scale(1.035); }
 }
 
 @keyframes dance-sparkle {

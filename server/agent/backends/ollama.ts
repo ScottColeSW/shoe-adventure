@@ -27,7 +27,13 @@ export class OllamaBackend implements AgentBackend {
         // tokens on its own line -- there is no grammar to enforce this,
         // so decide.ts's parser is the only thing standing between a
         // rambling reply and a legal choice.
-        body: JSON.stringify({ model, prompt, stream: false, options: { num_predict: 24 } }),
+        // keep_alive keeps the model resident in memory well past Ollama's 5-minute
+        // default idle-unload -- live-tested, a cold load (model not currently in
+        // memory) took ~12.5s on this machine, dwarfing any reasonable per-decision
+        // timeout. Without this, a model that idled out between decisions (e.g. during
+        // a slow stretch of the run) would silently eat that same ~12s cost again on
+        // the next call and look "stuck" rather than just being asked to reload.
+        body: JSON.stringify({ model, prompt, stream: false, options: { num_predict: 24 }, keep_alive: "30m" }),
         signal: controller.signal,
       });
       if (!res.ok) return { raw: null, latencyMs: Date.now() - started };

@@ -10,6 +10,7 @@
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
     "check-env": "tsx scripts/check-env.ts",
+    "seed-agent-memory": "tsx scripts/seed-agent-memory.ts",
     "format": "prettier --write ."
   },
   "dependencies": {

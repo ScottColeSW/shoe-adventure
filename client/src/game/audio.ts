@@ -14,6 +14,7 @@ type CueName =
   | "collectCommon"
   | "collectHeart"
   | "collectPowerup"
+  | "collectBig"
   | "hit"
   | "stomp"
   | "stompBoss"
@@ -31,6 +32,7 @@ const CUE_FILES: Record<CueName, string> = {
   collectCommon: "/audio/collect-common.mp3",
   collectHeart: "/audio/collect-heart.mp3",
   collectPowerup: "/audio/collect-powerup.mp3",
+  collectBig: "/audio/collect-big.mp3",
   hit: "/audio/hit.mp3",
   stomp: "/audio/stomp.mp3",
   stompBoss: "/audio/stomp-boss.mp3",
@@ -46,14 +48,17 @@ const MUSIC_FILES: Record<MusicLayer, string> = {
 
 const PICKUP_HEART_KINDS = new Set(["heart"]);
 const PICKUP_COMMON_KINDS = new Set(["button", "feather", "dash", "bonus"]);
-// Everything else (moon, chrome, moonstep, lash, gum, superJump, pump, hightop, loafer,
-// cowboy, sneaker, ultra) reads as an ability or form unlock and uses collectPowerup.
+/** Shoe-form transformations and major ability unlocks -- the ones players said were
+ * easy to miss. These get the boomier collectBig cue and (see GameWorld.ts's
+ * collectPickup/showPickupSplash) a full-screen splash banner, not just a chime. */
+const PICKUP_BIG_KINDS = new Set(["moon", "superJump", "chrome", "moonstep", "pump", "hightop", "loafer", "cowboy", "sneaker", "ultra", "lash", "gum", "heartPlus", "extraLife"]);
 
 /** Classifies a pickup kind string into which collect cue should play. Kept loose (string
  * rather than importing PickupKind) so this module has no dependency on GameWorld.ts. */
-export function classifyCollectCue(kind: string): "collectCommon" | "collectHeart" | "collectPowerup" {
+export function classifyCollectCue(kind: string): "collectCommon" | "collectHeart" | "collectPowerup" | "collectBig" {
   if (PICKUP_HEART_KINDS.has(kind)) return "collectHeart";
   if (PICKUP_COMMON_KINDS.has(kind)) return "collectCommon";
+  if (PICKUP_BIG_KINDS.has(kind)) return "collectBig";
   return "collectPowerup";
 }
 
@@ -235,6 +240,17 @@ export class AudioDirector {
       this.playCue("collectHeart", () => {
         this.playTone(660, 0.12, "sine", 0.22);
         this.playTone(880, 0.18, "sine", 0.2, 0.08);
+      });
+    } else if (cue === "collectBig") {
+      // A deliberately bigger, "boom" cue for form transformations and major ability
+      // unlocks -- a noise thump under a rising three-tone stack, distinct enough from
+      // collectPowerup's plain chime that a big pickup reads as a real event.
+      this.playCue("collectBig", () => {
+        this.playNoiseBurst(0.16, 260, 0.26);
+        this.playTone(220, 0.14, "sawtooth", 0.22, 0);
+        this.playTone(440, 0.16, "triangle", 0.22, 0.05);
+        this.playTone(660, 0.2, "triangle", 0.22, 0.12);
+        this.playTone(880, 0.26, "sine", 0.2, 0.2);
       });
     } else if (cue === "collectPowerup") {
       this.playCue("collectPowerup", () => {

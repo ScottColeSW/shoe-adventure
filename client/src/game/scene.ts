@@ -17,9 +17,25 @@ export interface GameHandle {
   dispose: () => void;
 }
 
+// WebGPU is currently forced off under `pnpm dev` (see DISABLE_WEBGPU_IN_DEV below):
+// live-tested against a real WebGPU-capable Chrome, `webGpuEngine.initAsync()` succeeds,
+// but every subsequent shader compile fails immediately with "Error while parsing WGSL:
+// unexpected token <!doctype html>" -- Babylon's WebGPU shader loader is fetching
+// something that resolves to Vite's dev-server SPA-fallback HTML instead of real WGSL
+// source, most likely a Vite dev dependency-pre-bundling quirk specific to
+// @babylonjs/core's WebGPU shader files. The scene still runs (physics/audio/HUD are
+// unaffected -- WebGPU validation errors don't throw), it just never draws anything,
+// which reads as "the shoe and the board are just gone." WebGL has no such issue and is
+// this project's long-documented fallback path, so it's the safe default until the
+// WebGPU/Vite-dev interaction is root-caused. This has only been confirmed under `pnpm
+// dev`; it may well be fine in a production build (`pnpm build && pnpm start`), which
+// doesn't go through Vite's dev dependency pre-bundling at all -- worth re-testing there
+// before assuming this is a real WebGPU-support bug rather than a dev-only one.
+const DISABLE_WEBGPU_IN_DEV = true;
+
 export async function createBestAvailableEngine(canvas: HTMLCanvasElement): Promise<RenderEngine> {
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu;
-  if (gpu) {
+  if (gpu && !(DISABLE_WEBGPU_IN_DEV && import.meta.env.DEV)) {
     try {
       const adapter = await gpu.requestAdapter();
       if (adapter) {

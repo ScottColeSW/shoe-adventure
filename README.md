@@ -84,6 +84,14 @@ Every sound effect and both music layers are generated directly in code with the
 pnpm install
 ```
 
+### (Optional) Give the agent a head start
+
+```bash
+pnpm seed-agent-memory
+```
+
+Pre-populates the agent decision database with synthetic-but-representative outcomes (a few seconds, no Ollama required) so Agent Run's Bayesian bandit isn't starting from zero the first time you watch it play. Safe to skip -- the game works fine without it, the bandit just learns from scratch as real runs happen.
+
 ### Start the dev server
 
 ```bash
@@ -112,6 +120,7 @@ pnpm start
 - `pnpm preview` — preview the built frontend locally
 - `pnpm check` — run TypeScript type checking
 - `pnpm check-env` — preflight check: confirms the decision/run history database can actually open on this machine, and reports whether Ollama is reachable. Optional, but worth running once before your first `pnpm dev` (mirrors Dominion's own `check_env.py`)
+- `pnpm seed-agent-memory` — optional, one-time: pre-populates the agent decision database with synthetic-but-representative outcomes (~6,300 rows, takes a few seconds) so the Bayesian bandit behind Agent Run (see `server/agent/decide.ts`) starts with real priors instead of a cold "totally unsure" state on a fresh clone. Doesn't call Ollama or any model — worth running once after `pnpm install`, before your first Agent Run
 - `pnpm format` — format the workspace with Prettier
 
 ## 🪡 Notes
