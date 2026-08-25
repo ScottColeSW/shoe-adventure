@@ -47,6 +47,19 @@ export function ensureReady(): void {
   getDb();
 }
 
+/** Closes this module's own connection if one is open -- fire-and-forget best-effort
+ * disk hygiene on process shutdown (see server/index.ts's and vite.config.ts's own SIGINT
+ * handlers), not a correctness requirement: better-sqlite3 is a plain file handle inside
+ * this process, not a separate resource that can leak, and SQLite's on-disk format
+ * survives an ungraceful stop fine either way. This just avoids leaving a stray -wal/-shm
+ * sidecar file behind. */
+export function closeDb(): void {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
 export function recordRun(record: RunRecord): void {
   // Same best-effort discipline as server/agent/history.ts's recordDecision: a completed
   // run must never fail to reach the player's win screen just because this write failed.

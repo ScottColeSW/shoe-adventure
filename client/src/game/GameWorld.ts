@@ -299,6 +299,8 @@ export interface UiSnapshot {
    * distinct chip from the scripted Super Run, which shares the same ribbon otherwise. */
   agentBackend?: string;
   agentModel?: string;
+  isTimeTrial: boolean;
+  timeTrialSecondsLeft: number;
   shoeForm: ShoeForm;
   /** Ordered, oldest first -- see PlayerState.specialMoveQueue's own comment. */
   specialMoveQueue: SpecialMoveKind[];
@@ -326,6 +328,13 @@ export interface UiSnapshot {
 }
 
 const WORLD_END = 66;
+// Time Trial's run clock, in seconds. A full scripted-demo run (no model latency, purely
+// mechanical) completes in roughly 70-90s; a real agent run runs slower (genuine decision
+// latency between beats), so this leaves real room to actually finish while still being a
+// felt constraint rather than one nobody could ever hit. Tune once real Time Trial batches
+// come back with real completion-time data.
+const TIME_TRIAL_DURATION = 240;
+
 /** How far above its look-at point the camera sits (world units) -- see updateCamera's own
  * comment for the resulting tilt angle. Kept as one named constant rather than a magic
  * number duplicated in both GameWorld.ts's per-frame updateCamera and scene.ts's
@@ -469,6 +478,12 @@ export class GameWorld {
    * title screen's Agent Run picker (see onStartAgent) can also set them
    * later, right before a run actually starts. */
   private isAgentRun: boolean;
+  /** Time Trial: a real run clock plus a tighter per-decision timeout (see decide.ts's
+   * resolveTimeoutMs/buildGameBriefing), as opposed to the ordinary Agent Run's "no time
+   * limit" framing. Set from the picker's toggle (see onStartAgent); false for every other
+   * mode, including the always-untouched scripted ?superrun demo. */
+  private isTimeTrial = false;
+  private timeTrialSecondsLeft = 0;
   private agentBackend: "ollama" | "llamacpp" | "hosted";
   private agentModel: string;
   private readonly agentRunId: string;
@@ -638,6 +653,18 @@ export class GameWorld {
    * command name -- see GameCanvas.tsx's Agent Run picker. */
   private onStartAgentBound = (event: Event) =>
     this.onStartAgent(event as CustomEvent<{ backend: "ollama"; model: string; auto?: boolean }>);
+  /** Catches the case quit()/returnToTitle() can't: the tab just closes (or crashes) mid
+   * agent run, with no button ever pressed. fetch() can't be trusted to complete once the
+   * page starts unloading, but navigator.sendBeacon is designed for exactly this -- it
+   * queues the request with the browser itself rather than the page's own lifecycle, so it
+   * still goes out. A JSON Blob (not a plain object) is required for the request to actually
+   * arrive as application/json -- sendBeacon's default content-type is text/plain, which
+   * the server's express.json() body parser would silently skip and 400 on. */
+  private onPageHideBound = () => {
+    if (!this.isAgentRun || !this.agentBackend || !this.agentModel) return;
+    const body = new Blob([JSON.stringify({ backend: this.agentBackend, model: this.agentModel })], { type: "application/json" });
+    navigator.sendBeacon("/api/agent/unload", body);
+  };
 
   constructor(scene: Scene, canvas: HTMLCanvasElement, camera: FreeCamera, glow: GlowLayer) {
     this.scene = scene;
@@ -705,6 +732,7 @@ export class GameWorld {
     window.removeEventListener("keyup", this.onKeyUpBound);
     window.removeEventListener("shoe-adventure:command", this.onCommandBound);
     window.removeEventListener("shoe-adventure:startAgent", this.onStartAgentBound);
+    window.removeEventListener("pagehide", this.onPageHideBound);
     this.audio.stopMusic();
     this.sparks.forEach((spark) => spark.mesh.dispose());
     this.projectiles.forEach((projectile) => projectile.root.dispose());
@@ -1943,6 +1971,7 @@ export class GameWorld {
     window.addEventListener("keyup", this.onKeyUpBound, { passive: false });
     window.addEventListener("shoe-adventure:command", this.onCommandBound);
     window.addEventListener("shoe-adventure:startAgent", this.onStartAgentBound);
+    window.addEventListener("pagehide", this.onPageHideBound);
   }
 
   private onKeyDown(event: KeyboardEvent) {
@@ -2157,13 +2186,15 @@ export class GameWorld {
    * own pre-show picker uses, since choosing a model mid-run makes no
    * sense: the backend/model a run reports (see publishUi's agentBackend/
    * agentModel fields) is meant to describe the run that's actually live. */
-  private onStartAgent(event: CustomEvent<{ backend: "ollama"; model: string; auto?: boolean }>) {
+  private onStartAgent(event: CustomEvent<{ backend: "ollama"; model: string; auto?: boolean; timeTrial?: boolean }>) {
     if (this.mode !== "title") return;
-    const { backend, model, auto } = event.detail;
+    const { backend, model, auto, timeTrial } = event.detail;
     if (!model) return;
     this.agentBackend = backend;
     this.agentModel = model;
     this.isAgentRun = true;
+    this.isTimeTrial = timeTrial ?? false;
+    this.timeTrialSecondsLeft = TIME_TRIAL_DURATION;
     if (auto) {
       this.autoRepeatActive = true;
       this.autoRepeatWins = 0;
@@ -2244,9 +2275,20 @@ export class GameWorld {
    * checkpoints, contraptions), so there is nothing else this needs to undo. */
   private returnToTitle() {
     if (this.mode !== "won" && this.mode !== "lost") return;
+    // Same reasoning as quit()'s own unload call -- this is the *other* path back to the
+    // picker (a finished win/loss, "TRY ANOTHER MODEL"), and without this a model stayed
+    // loaded the same way if the next pick was a different one.
+    if (this.isAgentRun && this.agentBackend && this.agentModel) {
+      fetch("/api/agent/unload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: this.agentBackend, model: this.agentModel }),
+      }).catch(() => { /* best-effort */ });
+    }
     this.mode = "title";
     this.superRun = false;
     this.isAgentRun = false;
+    this.isTimeTrial = false;
     this.setAgentActivity("idle", "STANDING BY");
     this.reunionTimer = 0;
     this.audio.stopMusic();
@@ -2260,6 +2302,17 @@ export class GameWorld {
    * drops every enemy still being tracked for an outcome report so nothing tries to
    * report back after the run is gone, and stops the music, before returning to title. */
   private quit() {
+    // Release whatever model is loaded rather than leaving it resident for its full
+    // 30-minute keep_alive after nobody's using it -- fire-and-forget, same discipline as
+    // reportDecisionOutcome's own best-effort fetch (a failed unload request must never
+    // block quitting). See decide.ts's unloadModel for why this exists at all.
+    if (this.isAgentRun && this.agentBackend && this.agentModel) {
+      fetch("/api/agent/unload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: this.agentBackend, model: this.agentModel }),
+      }).catch(() => { /* best-effort */ });
+    }
     if (this.agentGoalAbortController) {
       this.agentGoalAbortController.abort();
       this.agentGoalAbortController = null;
@@ -2289,6 +2342,7 @@ export class GameWorld {
     this.held.right = false;
     this.superRun = false;
     this.isAgentRun = false;
+    this.isTimeTrial = false;
     this.mode = "title";
     this.setAgentActivity("idle", "STANDING BY");
     this.message = "Lace up. The rescue starts now.";
@@ -2972,7 +3026,30 @@ export class GameWorld {
    * per-frame systems), never force-swept. Two different models -- or the same model
    * twice -- can genuinely take different routes, at different paces, and can genuinely
    * fail, which the old byte-identical-to-the-script version never could. */
+  /** Time Trial's real run clock -- decrements every frame regardless of what else is
+   * happening, and ends the run as a loss the instant it hits zero, same shape as
+   * damagePlayer's hearts<=0 branch (mode="lost", disable the player mesh, defeat sting,
+   * handleRunEnded so the auto-repeat harness and leaderboard both see a real loss).
+   * Returns true when it just ended the run, so updateAgentRun can bail out for this frame
+   * instead of continuing to process a run that no longer exists. */
+  private checkTimeTrialClock(delta: number): boolean {
+    this.timeTrialSecondsLeft = Math.max(0, this.timeTrialSecondsLeft - delta);
+    if (this.timeTrialSecondsLeft > 0) return false;
+    this.mode = "lost";
+    this.message = `${this.agentBackend}/${this.agentModel} ran out of time. Try another model, or take the route yourself.`;
+    this.superRunAction = `TIME TRIAL — ${this.agentBackend}/${this.agentModel} ran out of time.`;
+    this.setAgentActivity("fallback", "OUT OF TIME");
+    if (this.isAgentRun) this.logAgent(`⚠ Time Trial clock hit zero -- run ends as a loss`);
+    this.player.root.setEnabled(false);
+    this.audio.playDefeat();
+    this.audio.stopMusic();
+    this.handleRunEnded("lost");
+    this.publishUi(true);
+    return true;
+  }
+
   private updateAgentRun(delta: number) {
+    if (this.isTimeTrial && this.checkTimeTrialClock(delta)) return;
     this.superRunKickTimer = Math.max(0, this.superRunKickTimer - delta);
     this.superRunPauseTimer = Math.max(0, this.superRunPauseTimer - delta);
     if (this.superRunPauseTimer > 0 && this.player.dashTimer <= 0 && this.player.formAttackTimer <= 0 && this.player.ultraTimer <= 0) {
@@ -3209,7 +3286,7 @@ export class GameWorld {
     fetch("/api/agent/decide", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ runId: this.agentRunId, decisionType: "priorityAction", backend: this.agentBackend, model: this.agentModel, state }),
+      body: JSON.stringify({ runId: this.agentRunId, decisionType: "priorityAction", backend: this.agentBackend, model: this.agentModel, state, timeTrial: this.isTimeTrial }),
       signal: this.agentGoalAbortController.signal,
     })
       .then((res) => (res.ok ? res.json() : null))
@@ -3420,6 +3497,7 @@ export class GameWorld {
         backend: this.agentBackend,
         model: this.agentModel,
         state,
+        timeTrial: this.isTimeTrial,
       }),
       signal: this.agentEnemyAbortController.signal,
     })
@@ -4776,6 +4854,8 @@ export class GameWorld {
       popupVariant: this.popupVariant,
       agentBackend: this.isAgentRun ? this.agentBackend : undefined,
       agentModel: this.isAgentRun ? this.agentModel : undefined,
+      isTimeTrial: this.isTimeTrial,
+      timeTrialSecondsLeft: Math.ceil(this.timeTrialSecondsLeft),
       shoeForm: this.player.shoeForm,
       specialMoveQueue: this.player.specialMoveQueue.slice(),
       specialMoveReady: this.player.specialMoveCooldown <= 0,

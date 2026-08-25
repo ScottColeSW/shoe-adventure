@@ -85,6 +85,15 @@ export function ensureReady(): void {
   getDb();
 }
 
+/** See server/runs.ts's closeDb (the same pattern, mirrored here for this module's own
+ * private connection) -- best-effort disk hygiene on shutdown, not a correctness fix. */
+export function closeDb(): void {
+  if (db) {
+    db.close();
+    db = null;
+  }
+}
+
 /** Wraps repeated recordDecision/recordOutcome calls in a single SQLite transaction.
  * Each call is normally its own implicit transaction -- a real fsync to disk per write,
  * the right default for real gameplay (roughly one decision every second or two) -- but

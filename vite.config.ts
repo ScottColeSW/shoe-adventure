@@ -23,6 +23,17 @@ function vitePluginAgentApi(): Plugin {
       const app = express();
       app.use("/api/agent", agentRouter);
       server.middlewares.use(app);
+
+      // Best-effort disk hygiene on Ctrl+C during `pnpm dev` -- see closeDb's own comment
+      // in history.ts/runs.ts. Deliberately no process.exit() here: Vite's own CLI owns
+      // SIGINT and the actual shutdown sequence in dev mode, this just closes the two
+      // SQLite handles alongside it rather than racing or short-circuiting that.
+      const { closeDb: closeHistoryDb } = await import("./server/agent/history");
+      const { closeDb: closeRunsDb } = await import("./server/runs");
+      process.on("SIGINT", () => {
+        closeHistoryDb();
+        closeRunsDb();
+      });
     },
   };
 }

@@ -4,6 +4,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { agentRouter } from "./agent/router";
 import { runsRouter } from "./runsRouter";
+import { closeDb as closeHistoryDb } from "./agent/history";
+import { closeDb as closeRunsDb } from "./runs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +38,16 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+  });
+
+  // Best-effort disk hygiene on shutdown -- see closeDb's own comment in history.ts/runs.ts
+  // for why this isn't a correctness fix, just avoids a stray -wal/-shm file. The Ollama
+  // model-unload gap this same cleanup effort found (see decide.ts's unloadModel) is a real
+  // resource leak; this SIGINT handler is not that, it's the much smaller adjacent tidy-up.
+  process.on("SIGINT", () => {
+    closeHistoryDb();
+    closeRunsDb();
+    process.exit(0);
   });
 }
 

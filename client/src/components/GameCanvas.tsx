@@ -30,6 +30,8 @@ const initialSnapshot: UiSnapshot = {
   popupText: "",
   popupTilt: 0,
   popupVariant: "pickup",
+  isTimeTrial: false,
+  timeTrialSecondsLeft: 0,
   shoeForm: "starter",
   specialMoveQueue: [],
   specialMoveReady: true,
@@ -125,10 +127,16 @@ function formatBytes(bytes: number) {
   return `${bytes} B`;
 }
 
-function dispatchStartAgent(model: string, auto?: boolean) {
+function formatClock(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function dispatchStartAgent(model: string, auto?: boolean, timeTrial?: boolean) {
   window.dispatchEvent(
-    new CustomEvent<{ backend: "ollama"; model: string; auto?: boolean }>("shoe-adventure:startAgent", {
-      detail: { backend: "ollama", model, auto },
+    new CustomEvent<{ backend: "ollama"; model: string; auto?: boolean; timeTrial?: boolean }>("shoe-adventure:startAgent", {
+      detail: { backend: "ollama", model, auto, timeTrial },
     }),
   );
 }
@@ -147,6 +155,7 @@ export default function GameCanvas() {
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [timeTrialEnabled, setTimeTrialEnabled] = useState(false);
   // Set while POST /api/agent/warm is in flight -- see the START AGENT RUN button below.
   // A cold model load was live-tested at ~12.5s; better to show that as an explicit
   // "warming up" moment than let the first real gameplay decision eat it silently.
@@ -308,7 +317,7 @@ export default function GameCanvas() {
       })
       .finally(() => {
         setWarmingModel(null);
-        dispatchStartAgent(model, auto);
+        dispatchStartAgent(model, auto, timeTrialEnabled);
         setAgentPickerOpen(false);
       });
   };
@@ -433,6 +442,15 @@ export default function GameCanvas() {
               <span>LEVEL {snapshot.levelIndex}/{snapshot.levelCount}</span>
               <b>{snapshot.levelLabel}</b>
             </div>
+            {snapshot.isTimeTrial && (
+              <div
+                className={`time-trial-clock${snapshot.timeTrialSecondsLeft <= 30 ? " time-trial-clock--urgent" : ""}`}
+                aria-label={`Time Trial clock: ${formatClock(snapshot.timeTrialSecondsLeft)} remaining`}
+              >
+                <span>⏱ TIME TRIAL</span>
+                <b>{formatClock(snapshot.timeTrialSecondsLeft)}</b>
+              </div>
+            )}
             <p>{snapshot.message}</p>
             <div className="rescue-meter" aria-label={`Rescue route: level ${snapshot.levelIndex} of ${snapshot.levelCount}, ${rescueProgress}% complete`}>
               <span className="rescue-meter-zones">
@@ -506,6 +524,14 @@ export default function GameCanvas() {
             aria-pressed={snapshot.muted}
           >
             {snapshot.muted ? "MUTED" : "SOUND"}
+          </button>
+          <button
+            className="hud-quit stitched-panel"
+            type="button"
+            onClick={() => dispatchCommand("quit")}
+            title="Stop this run, cleanly close any in-flight agent request and release the model, and return to the title screen"
+          >
+            QUIT
           </button>
         </section>
       )}
@@ -680,6 +706,16 @@ export default function GameCanvas() {
                         );
                       })}
                     </div>
+                    <label className="agent-picker-timetrial">
+                      <input
+                        type="checkbox"
+                        checked={timeTrialEnabled}
+                        onChange={(event) => setTimeTrialEnabled(event.target.checked)}
+                      />
+                      <span>
+                        TIME TRIAL <span className="agent-picker-timetrial-hint">— run against the clock, data-informed decisions under pressure</span>
+                      </span>
+                    </label>
                     <div className="agent-picker-actions">
                       <button
                         className="super-run-action agent-picker-confirm"
@@ -687,7 +723,7 @@ export default function GameCanvas() {
                         disabled={!selectedModel || warmingModel !== null}
                         onClick={() => beginAgentRun(false)}
                       >
-                        {warmingModel ? `WARMING UP ${warmingModel}…` : <>START AGENT RUN <span>✦</span></>}
+                        {warmingModel ? `WARMING UP ${warmingModel}…` : timeTrialEnabled ? <>START TIME TRIAL <span>⏱</span></> : <>START AGENT RUN <span>✦</span></>}
                       </button>
                       <button
                         className="super-run-action agent-picker-repeat"

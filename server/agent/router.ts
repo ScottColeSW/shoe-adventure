@@ -9,7 +9,7 @@
 // both entry points, no route drift between dev and prod.
 
 import express, { Router } from "express";
-import { decide, warmModel } from "./decide";
+import { decide, warmModel, unloadModel } from "./decide";
 import { getStats, recordOutcome, type DecisionRecord } from "./history";
 import { agentConfig } from "./config";
 import { getModelCatalog } from "./catalog";
@@ -41,6 +41,20 @@ agentRouter.post("/warm", async (req, res) => {
     return;
   }
   const result = await warmModel(backend, model);
+  res.json(result);
+});
+
+/** unloadModel's HTTP surface -- called from the client's quit() and from the Agent Run
+ * picker right before switching to a different model, so a model doesn't just sit loaded
+ * in RAM/VRAM for its full 30-minute keep_alive after nobody's using it anymore. */
+agentRouter.post("/unload", async (req, res) => {
+  const backend = req.body?.backend as DecisionRequest["backend"] | undefined;
+  const model = req.body?.model as string | undefined;
+  if (!backend || !model) {
+    res.status(400).json({ error: "backend and model are required" });
+    return;
+  }
+  const result = await unloadModel(backend, model);
   res.json(result);
 });
 

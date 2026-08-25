@@ -96,6 +96,12 @@ export interface DecisionRequest {
   backend: "ollama" | "llamacpp" | "hosted";
   model: string;
   state: DecisionState;
+  /** Time Trial: a real run clock plus a tighter per-decision timeout, as opposed to the
+   * ordinary Agent Run's "there's no clock running" framing -- see decide.ts's
+   * resolveTimeoutMs and buildGameBriefing for what this actually changes. Optional/absent
+   * means ordinary Agent Run; existing callers that never set this keep behaving exactly
+   * as before. */
+  timeTrial?: boolean;
 }
 
 export interface DecisionResponse {

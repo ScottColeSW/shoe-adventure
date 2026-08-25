@@ -66,7 +66,9 @@ function buildGameBriefing(request: DecisionRequest): string {
   return [
     "You are playing Shoe Adventure, a side-scrolling platformer. You control Right Shoe on a rescue mission across 6 discrete screens, each a full toy-scale level in its own right (shoeboxes, a laundry lane, a rogue-skate tower, and more). Reach the exit archway at the far end of a screen to advance to the next one -- there is no backtracking to an earlier screen.",
     "The 6th and final screen ends differently: instead of an exit archway, it holds the true boss guarding a rescue dome. Beat the boss, then reach Left Shoe inside the dome to reunite the pair and win the whole run. Screens 1-5 have no boss gate blocking the exit itself, though some have a tougher mini-boss enemy along the way.",
-    "There is no time limit. Nothing punishes you for slowing down to collect a useful pickup, fight an enemy carefully, or size up the situation before choosing -- rushing toward the exit is not automatically the safe or correct call, just one option among several. Weigh each decision on its own merits instead of defaulting to forward progress.",
+    request.timeTrial
+      ? "This is a TIME TRIAL: the whole run is on a real clock, and running out of time ends it as a loss. Decide quickly -- when the ranked history below has a clear answer, lean on it rather than deliberating at length. Speed matters here in a way it doesn't in an ordinary run."
+      : "There is no time limit. Nothing punishes you for slowing down to collect a useful pickup, fight an enemy carefully, or size up the situation before choosing -- rushing toward the exit is not automatically the safe or correct call, just one option among several. Weigh each decision on its own merits instead of defaulting to forward progress.",
     "General strategy: pickups along the way unlock abilities and shoe-form transformations that make later fights and obstacles much easier, so a detour for one is often worth it even if it costs some distance. Enemies deal real damage -- hearts are limited, so running low means favoring a safe, reliable response over a risky one. Boss and mini-boss enemies are tougher and often go down cleanest to a specific ability rather than a plain attack.",
     "You will be asked many small decisions like this over the course of one run, and this same situation will come up again in future runs too. When past outcomes for a similar situation are shown below, they reflect what has actually worked before across real attempts -- weigh them accordingly.",
     buildLeaderboardLine(request) || null,
@@ -83,7 +85,14 @@ function buildGameBriefing(request: DecisionRequest): string {
  * consistently fast gets asked to answer faster over time, and a model that's
  * consistently slow keeps the headroom its own track record says it actually needs,
  * rather than every backend+model sharing one guessed constant forever. */
-function resolveTimeoutMs(backend: string, model: string): number {
+// Time Trial's real ceiling regardless of a model's own self-tuned history below -- "under
+// time pressure which we do not have in our normal runs" (the user). Deliberately not run
+// through the same self-tuning as the ordinary path: the whole point is a hard, felt
+// constraint, not a comfortable one a fast model quietly grows into.
+const TIME_TRIAL_TIMEOUT_MS = 2200;
+
+function resolveTimeoutMs(backend: string, model: string, timeTrial: boolean): number {
+  if (timeTrial) return TIME_TRIAL_TIMEOUT_MS;
   const profile = getLatencyProfile(backend, model);
   if (!profile || profile.samples < agentConfig.decisionLatencySamplesToTighten) return agentConfig.decisionTimeoutMs;
   const tightened = profile.p90LatencyMs * agentConfig.decisionLatencyBuffer;
@@ -321,7 +330,7 @@ export async function decide(request: DecisionRequest): Promise<DecisionResponse
 
   const handler = DECISION_HANDLERS[request.decisionType];
   const prompt = handler.buildPrompt(request, memoryLine);
-  const timeoutMs = resolveTimeoutMs(request.backend, request.model);
+  const timeoutMs = resolveTimeoutMs(request.backend, request.model, request.timeTrial ?? false);
   const { raw, latencyMs } = await backend.decide(prompt, request.model, handler.options, timeoutMs);
   let choice = handler.parse(raw) as DecisionResponse["choice"];
   let fallback = choice === null;
@@ -401,4 +410,27 @@ export async function warmModel(backendName: DecisionRequest["backend"], model: 
   if (!backend) return { warm: false, latencyMs: 0 };
   const { raw, latencyMs } = await backend.decide("Reply with exactly one word: ready.", model, ["ready"], 25000);
   return { warm: raw !== null, latencyMs };
+}
+
+/** warmModel's counterpart, fired when a run actually ends (quit, or picking a different
+ * model) instead of never -- every decide()/warmModel call sets keep_alive: "30m" (see
+ * ollama.ts's own comment on why), and until this existed nothing ever released that early.
+ * A real hygiene gap for anyone who plays this: walk away or switch models mid-session and
+ * whatever was loaded -- some of these are 18GB -- just sits in RAM/VRAM for the full 30
+ * minutes regardless. Ollama-only (the only backend with a local resident-model concept to
+ * release); other backends no-op true, matching warmModel's own graceful-no-op shape.
+ * Never throws -- this fires from UI actions (quit, model switch) that must never be blocked
+ * or visibly fail on a network hiccup here. */
+export async function unloadModel(backendName: DecisionRequest["backend"], model: string): Promise<{ unloaded: boolean }> {
+  if (backendName !== "ollama") return { unloaded: true };
+  try {
+    const res = await fetch(`${agentConfig.ollamaUrl}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, keep_alive: 0 }),
+    });
+    return { unloaded: res.ok };
+  } catch {
+    return { unloaded: false };
+  }
 }
