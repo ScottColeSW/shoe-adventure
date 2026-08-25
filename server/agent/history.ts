@@ -5,6 +5,7 @@
 
 import Database from "better-sqlite3";
 import { agentConfig } from "./config";
+import { getAllRuns } from "../runs";
 
 export interface DecisionRecord {
   runId: string;
@@ -13,6 +14,14 @@ export interface DecisionRecord {
   model: string;
   choice: string | null;
   fallback: boolean;
+  /** True when a live, parseable model answer disagreed with a well-established memory
+   * signal by a wide margin (see decide.ts's CONFIDENCE_OVERRIDE_MIN_SAMPLES/GAP) --
+   * choice is still always the model's own real answer, never silently replaced. This
+   * used to be called "overridden" back when decide.ts actually swapped the choice out;
+   * the user asked for that swap removed (spoon-feeding the model its answer defeats the
+   * point of watching it get better at reasoning) but the disagreement itself kept as a
+   * recorded signal -- worth noting when model and data disagree, not acting on it for them. */
+  disagreesWithMemory: boolean;
   outcome: "enemy_defeated" | "player_damaged" | "avoided" | "unknown";
   latencyMs: number;
   /** A bucketed signature of the decision-relevant state (see decide.ts's
@@ -58,6 +67,12 @@ function getDb(): Database.Database {
   `);
   ensureColumn(db, "decisions", "context_key", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "decisions", "context_key_general", "TEXT NOT NULL DEFAULT ''");
+  // "overridden" (below) is legacy -- decide.ts no longer swaps the model's choice out, so
+  // nothing writes to it anymore; left in place rather than dropped since SQLite column
+  // drops are more trouble than a harmless always-0 leftover is worth. disagrees_with_memory
+  // is its real replacement: the same detection, recorded instead of acted on.
+  ensureColumn(db, "decisions", "overridden", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "decisions", "disagrees_with_memory", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 
@@ -91,10 +106,10 @@ export function recordDecision(record: DecisionRecord): number | null {
   try {
     const result = getDb()
       .prepare(
-        `INSERT INTO decisions (run_id, decision_type, backend, model, choice, fallback, outcome, latency_ms, context_key, context_key_general)
-         VALUES (@runId, @decisionType, @backend, @model, @choice, @fallback, @outcome, @latencyMs, @contextKey, @contextKeyGeneral)`,
+        `INSERT INTO decisions (run_id, decision_type, backend, model, choice, fallback, outcome, latency_ms, context_key, context_key_general, disagrees_with_memory)
+         VALUES (@runId, @decisionType, @backend, @model, @choice, @fallback, @outcome, @latencyMs, @contextKey, @contextKeyGeneral, @disagreesWithMemory)`,
       )
-      .run({ ...record, fallback: record.fallback ? 1 : 0 });
+      .run({ ...record, fallback: record.fallback ? 1 : 0, disagreesWithMemory: record.disagreesWithMemory ? 1 : 0 });
     return Number(result.lastInsertRowid);
   } catch (error) {
     console.error(JSON.stringify({ event: "agent_history_write_failed", error: String(error) }));
@@ -226,27 +241,58 @@ export interface BackendModelStats {
   model: string;
   totalDecisions: number;
   fallbackRate: number;
+  /** See DecisionRecord.disagreesWithMemory's own comment -- how often the model's own
+   * answer diverged sharply from what the data would have picked. Purely observational: the
+   * model's choice always executes as given. Tracked separately from fallbackRate since they
+   * read very differently (the model never answered vs. it answered and reasoned against
+   * the numbers) -- and this is the number to watch for whether the agent's own reasoning
+   * is closing that gap over time, independent of the data ever correcting it. */
+  disagreesWithMemoryRate: number;
   avgLatencyMs: number;
   outcomeBreakdown: Record<string, number>;
+  /** Choice distribution split by decision type -- outcomeBreakdown above mixes
+   * enemyResponse and priorityAction choices together, which hides exactly the kind of
+   * lopsided behavior (e.g. "advance" picked 9x out of 10) a stats page exists to surface. */
+  choicesByDecisionType: Record<string, Record<string, number>>;
+  totalRuns: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  fastestWinSeconds: number | null;
+  currentStreak: { type: "win" | "loss"; length: number } | null;
+  longestWinStreak: number;
+  /** Chronological win/loss timeline, oldest first -- enough to render a streak strip or
+   * spot when a model's fortunes actually turned, not just the summary numbers. */
+  timeline: Array<{ runId: string; won: boolean; startedAt: string; seconds: number | null }>;
 }
 
 export function getStats(): { totalDecisions: number; byBackendModel: BackendModelStats[] } {
   // Same best-effort discipline as recordDecision above: a read failure
   // here must return an empty stats shape, never crash the dev server.
-  let rows: Array<{ backend: string; model: string; fallback: number; outcome: string; latencyMs: number }>;
+  let rows: Array<{ backend: string; model: string; runId: string; decisionType: string; choice: string | null; fallback: number; disagreesWithMemory: number; outcome: string; latencyMs: number; createdAt: string }>;
   try {
     rows = getDb()
       .prepare(
-        `SELECT backend, model, choice, fallback, outcome, latency_ms as latencyMs FROM decisions`,
+        `SELECT backend, model, run_id as runId, decision_type as decisionType, choice, fallback, disagrees_with_memory as disagreesWithMemory, outcome, latency_ms as latencyMs, created_at as createdAt FROM decisions`,
       )
-      .all() as Array<{ backend: string; model: string; fallback: number; outcome: string; latencyMs: number }>;
+      .all() as typeof rows;
   } catch (error) {
     console.error(JSON.stringify({ event: "agent_history_read_failed", error: String(error) }));
     return { totalDecisions: 0, byBackendModel: [] };
   }
 
+  // Every completed run (win only -- see recordRunCompletion's own comment on why losses
+  // never reach this table) for the backend/model + run_id cross-reference below.
+  const wins = getAllRuns().filter((run) => run.mode === "agent");
+  const winByRunId = new Map(wins.map((run) => [run.runId, run]));
+
   const groups = new Map<string, typeof rows>();
   for (const row of rows) {
+    // scripts/seed-agent-memory.ts's synthetic bootstrap rows (backend "ollama", model
+    // "seed-data") exist to warm the Bayesian bandit before any real model has played, not
+    // to represent a model that actually ran -- showing them on a stats page as if they
+    // were a competitor would misattribute made-up numbers to nobody.
+    if (row.model === "seed-data") continue;
     const key = `${row.backend}::${row.model}`;
     const group = groups.get(key) ?? [];
     group.push(row);
@@ -256,14 +302,69 @@ export function getStats(): { totalDecisions: number; byBackendModel: BackendMod
   const byBackendModel: BackendModelStats[] = Array.from(groups.entries()).map(([key, group]) => {
     const [backend, model] = key.split("::");
     const outcomeBreakdown: Record<string, number> = {};
-    for (const row of group) outcomeBreakdown[row.outcome] = (outcomeBreakdown[row.outcome] ?? 0) + 1;
+    const choicesByDecisionType: Record<string, Record<string, number>> = {};
+    for (const row of group) {
+      outcomeBreakdown[row.outcome] = (outcomeBreakdown[row.outcome] ?? 0) + 1;
+      if (row.choice) {
+        const byChoice = choicesByDecisionType[row.decisionType] ?? {};
+        byChoice[row.choice] = (byChoice[row.choice] ?? 0) + 1;
+        choicesByDecisionType[row.decisionType] = byChoice;
+      }
+    }
+
+    // One row per distinct run_id, earliest decision timestamp as the run's start --
+    // cross-referenced against winByRunId (a win if present there, a loss otherwise, since
+    // every attempt -- win or lose -- generates at least one decision but only a win
+    // reaches the runs table).
+    const runStarts = new Map<string, string>();
+    for (const row of group) {
+      const existing = runStarts.get(row.runId);
+      if (!existing || row.createdAt < existing) runStarts.set(row.runId, row.createdAt);
+    }
+    const timeline = Array.from(runStarts.entries())
+      .map(([runId, startedAt]) => {
+        const win = winByRunId.get(runId);
+        return { runId, won: Boolean(win), startedAt, seconds: win?.seconds ?? null };
+      })
+      .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+
+    let longestWinStreak = 0;
+    let running = 0;
+    for (const entry of timeline) {
+      running = entry.won ? running + 1 : 0;
+      longestWinStreak = Math.max(longestWinStreak, running);
+    }
+    let currentStreak: BackendModelStats["currentStreak"] = null;
+    for (let i = timeline.length - 1; i >= 0; i -= 1) {
+      const won = timeline[i].won;
+      if (currentStreak === null) currentStreak = { type: won ? "win" : "loss", length: 1 };
+      else if ((currentStreak.type === "win") === won) currentStreak.length += 1;
+      else break;
+    }
+
+    const winCount = timeline.filter((entry) => entry.won).length;
+    const fastestWinSeconds = timeline.reduce<number | null>(
+      (fastest, entry) => (entry.won && entry.seconds != null && (fastest == null || entry.seconds < fastest) ? entry.seconds : fastest),
+      null,
+    );
+
     return {
       backend,
       model,
       totalDecisions: group.length,
       fallbackRate: group.filter((row) => row.fallback).length / group.length,
+      disagreesWithMemoryRate: group.filter((row) => row.disagreesWithMemory).length / group.length,
       avgLatencyMs: group.reduce((sum, row) => sum + row.latencyMs, 0) / group.length,
       outcomeBreakdown,
+      choicesByDecisionType,
+      totalRuns: timeline.length,
+      wins: winCount,
+      losses: timeline.length - winCount,
+      winRate: timeline.length > 0 ? winCount / timeline.length : 0,
+      fastestWinSeconds,
+      currentStreak,
+      longestWinStreak,
+      timeline,
     };
   });
 

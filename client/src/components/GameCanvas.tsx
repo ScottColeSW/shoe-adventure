@@ -1,8 +1,9 @@
 // The Lost Pair visual reminder: this UI frames a tactile twilight rescue quest—never a generic dashboard. Use stitched patches, Rescue Coral #FF5A4F, warm cream, and cinematic asymmetry.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "wouter";
 import { createBestAvailableEngine, createGameScene, type GameHandle, type RenderEngine } from "@/game/scene";
-import type { UiSnapshot } from "@/game/GameWorld";
+import { LEVEL_LABELS, type UiSnapshot } from "@/game/GameWorld";
 
 const initialSnapshot: UiSnapshot = {
   mode: "title",
@@ -30,8 +31,8 @@ const initialSnapshot: UiSnapshot = {
   popupTilt: 0,
   popupVariant: "pickup",
   shoeForm: "starter",
-  laceLash: false,
-  gumStomp: false,
+  specialMoveQueue: [],
+  specialMoveReady: true,
   superJump: false,
   shoeFormAttack: "",
   formAttackReady: false,
@@ -69,8 +70,7 @@ type Command =
   | "pause"
   | "jump"
   | "dash"
-  | "lash"
-  | "stomp"
+  | "specialMove"
   | "formAttack"
   | "ultra"
   | "holdLeft"
@@ -344,6 +344,31 @@ export default function GameCanvas() {
           <div className="stage-box stage-box-right"><span>ROGUE TOWER</span></div>
         </div>
       )}
+      {snapshot.mode !== "title" && !snapshot.isLegacyWorld && (
+        // The six-screen replacement for .stage-storyline above -- that strip hardcoded 4
+        // fixed contraption names for one 66-unit world and can't generalize to a variable
+        // screen count, so it was gated off entirely (isLegacyWorld) during the discrete-
+        // screens rebuild with nothing put back in its place. LEVEL_LABELS (exported from
+        // GameWorld.ts) drives this one instead, so it stays correct if the level count or
+        // names ever change.
+        <div className="route-line-strip" aria-hidden="true">
+          <span className="route-line-start">RIGHTY</span>
+          <div className="route-line-track">
+            {LEVEL_LABELS.map((label, index) => {
+              const levelNumber = index + 1;
+              const state = levelNumber < snapshot.levelIndex || snapshot.rescued ? "done" : levelNumber === snapshot.levelIndex ? "current" : "upcoming";
+              const side = index % 2 === 0 ? "up" : "down";
+              return (
+                <div key={label} className={`route-line-node route-line-node--${state} route-line-node--${side}`}>
+                  <i className="route-line-dot" />
+                  <span className="route-line-rib">{label}</span>
+                </div>
+              );
+            })}
+          </div>
+          <span className="route-line-end">LEFTY</span>
+        </div>
+      )}
       <div className="graphics-badge" aria-label="Browser graphics mode">WEBGPU READY · WEBGL FALLBACK</div>
       {snapshot.autoRepeatActive && (
         <div className="auto-repeat-chip" aria-live="polite" aria-label={`Auto-repeat running: ${snapshot.autoRepeatWins} wins, ${snapshot.autoRepeatLosses} losses, stopping at ${snapshot.autoRepeatTarget} of either`}>
@@ -449,8 +474,12 @@ export default function GameCanvas() {
               <b>{heroFormLabel}</b>
               <span className={snapshot.superJump ? "upgrade-unlocked super-jump-chip" : ""}>⇧ · SUPER JUMP</span>
               {snapshot.shoeFormAttack && <span className={snapshot.formAttackReady ? "upgrade-unlocked form-attack-chip" : "form-attack-chip"}>F · {snapshot.shoeFormAttack}</span>}
-              <span className={snapshot.laceLash ? "upgrade-unlocked" : ""}>Q · LACE LASH</span>
-              <span className={snapshot.gumStomp ? "upgrade-unlocked" : ""}>E · GUM STOMP</span>
+              <span
+                className={snapshot.specialMoveQueue.length > 0 && snapshot.specialMoveReady ? "upgrade-unlocked" : ""}
+                title={snapshot.specialMoveQueue.length > 0 ? snapshot.specialMoveQueue.map((kind) => (kind === "gumStomp" ? "Gum Stomp" : "Lace Lash")).join(", ") : "Storage empty"}
+              >
+                X · SPECIAL MOVE{snapshot.specialMoveQueue.length > 0 ? ` (${snapshot.specialMoveQueue.length})` : ""}
+              </span>
               <span className={snapshot.ultraMove ? "upgrade-unlocked ultra-chip" : "ultra-chip"}>U · ULTRA MOVE</span>
             </div>
             <div className="powerup-stitches" aria-hidden="true"><i /><i /><i /></div>
@@ -581,6 +610,9 @@ export default function GameCanvas() {
               {snapshot.mode === "title" && (
                 <button className="secondary-action reunion-preview-action" type="button" onClick={() => dispatchCommand("celebrate")}>WATCH THE PAIR DANCE</button>
               )}
+              {snapshot.mode === "title" && (
+                <Link href="/stats" className="secondary-action stats-link-action">AGENT STATS <span>↗</span></Link>
+              )}
               {snapshot.mode === "won" && snapshot.superRun && !snapshot.agentBackend && (
                 <button className="super-run-action" type="button" onClick={() => dispatchCommand("superRun")}>REPLAY SUPER RUN <span>✦</span></button>
               )}
@@ -604,6 +636,14 @@ export default function GameCanvas() {
                 </button>
               )}
             </div>
+
+            {snapshot.mode === "title" && (
+              <footer className="title-footer">
+                <a href="/about.html">ABOUT</a>
+                <span aria-hidden="true">·</span>
+                <a href="/books.html">BOOKS</a>
+              </footer>
+            )}
 
             {snapshot.mode === "title" && agentPickerOpen && (
               <div className="agent-picker" aria-label="Choose a model to drive the Agent Run">
@@ -667,10 +707,9 @@ export default function GameCanvas() {
             {snapshot.mode === "title" && (
               <div className="controls-guide" aria-label="Game controls">
                 <span><kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> RUN</span>
-                <span><kbd>SPACE</kbd> JUMP</span>
-                <span><kbd>SHIFT</kbd> LACE DASH</span>
-                <span><kbd>Q</kbd> LACE LASH</span>
-                <span><kbd>E</kbd> GUM STOMP</span>
+                <span><kbd>W</kbd> or <kbd>SPACE</kbd> JUMP</span>
+                <span><kbd>S</kbd> or <kbd>SHIFT</kbd> LACE DASH</span>
+                <span><kbd>X</kbd> SPECIAL MOVE</span>
                 <span><kbd>F</kbd> FORM ATTACK</span>
                 <span><kbd>U</kbd> ULTRA MOVE</span>
               </div>
@@ -699,8 +738,9 @@ export default function GameCanvas() {
           </div>
           <div className="touch-cluster touch-action">
             {snapshot.shoeFormAttack && <button type="button" className="form-touch" onPointerDown={() => dispatchCommand("formAttack")}>{snapshot.shoeFormAttack.split(" ")[0]}</button>}
-            {snapshot.laceLash && <button type="button" className="lash-touch" onPointerDown={() => dispatchCommand("lash")}>LASH</button>}
-            {snapshot.gumStomp && <button type="button" className="stomp-touch" onPointerDown={() => dispatchCommand("stomp")}>STOMP</button>}
+            {snapshot.specialMoveQueue.length > 0 && (
+              <button type="button" className="special-move-touch" onPointerDown={() => dispatchCommand("specialMove")}>SPECIAL<b>{snapshot.specialMoveQueue.length}</b></button>
+            )}
             {snapshot.ultraMove && <button type="button" className="ultra-touch" onPointerDown={() => dispatchCommand("ultra")}>ULTRA</button>}
             <button type="button" className="dash-touch" onPointerDown={() => dispatchCommand("dash")}>DASH</button>
             <button type="button" className="jump-touch" onPointerDown={() => dispatchCommand("jump")}>JUMP</button>

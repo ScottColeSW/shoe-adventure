@@ -71,6 +71,24 @@ export interface LeaderboardEntry {
   createdAt: string;
 }
 
+/** Raw dump for /api/agent/stats (see history.ts's getStats): every completed run, not
+ * just the leaderboard's top-N-by-speed slice, and including run_id so a stats query can
+ * cross-reference against server/agent/history.ts's decisions table (which knows about
+ * every attempt, win or lose -- this table only ever gets a row on a win, see
+ * recordRunCompletion's own comment in GameWorld.ts). run_id is what makes that join
+ * possible; getLeaderboard() above deliberately omits it since the public leaderboard has
+ * no use for it. */
+export function getAllRuns(): RunRecord[] {
+  try {
+    return getDb()
+      .prepare(`SELECT run_id as runId, mode, backend, model, seconds, hearts, buttons FROM runs`)
+      .all() as RunRecord[];
+  } catch (error) {
+    console.error(JSON.stringify({ event: "run_history_read_failed", error: String(error) }));
+    return [];
+  }
+}
+
 export function getLeaderboard(limit: number): LeaderboardEntry[] {
   // Same best-effort discipline as recordRun above: a read failure here
   // (a bad db path, a locked file) must show an empty leaderboard, never

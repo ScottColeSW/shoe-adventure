@@ -62,12 +62,19 @@ export async function createBestAvailableEngine(canvas: HTMLCanvasElement): Prom
 
 export async function createGameScene(engine: RenderEngine, canvas: HTMLCanvasElement): Promise<GameHandle> {
   const scene = new Scene(engine);
-  scene.clearColor = new Color4(0.025, 0.035, 0.105, 0);
+  // Was near-black (0.025, 0.035, 0.105) -- read as pitch night rather than the lit-up
+  // evening blue the rest of the theme is going for (see index.css's own header comment).
+  scene.clearColor = new Color4(0.08, 0.13, 0.29, 0);
   scene.imageProcessingConfiguration.toneMappingEnabled = true;
-  scene.imageProcessingConfiguration.exposure = 1.03;
-  scene.imageProcessingConfiguration.contrast = 1.14;
+  // "brightness down a titch, contrast up" -- exposure 1.03->0.94, contrast 1.14->1.26.
+  scene.imageProcessingConfiguration.exposure = 0.94;
+  scene.imageProcessingConfiguration.contrast = 1.26;
 
-  const camera = new FreeCamera("shoeAdventureCamera", new Vector3(0, -0.55, -16), scene);
+  // y=2.1 vs. the -0.4 target below gives roughly a 9-degree downward tilt over the 16-unit
+  // view distance -- keep in sync with GameWorld.ts's CAMERA_TILT_HEIGHT, which applies the
+  // same pitch every frame during actual play; this is only what the title screen (which
+  // never runs updateCamera) sees before a run starts.
+  const camera = new FreeCamera("shoeAdventureCamera", new Vector3(0, 2.1, -16), scene);
   camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
   camera.minZ = 0.1;
   camera.maxZ = 100;
@@ -78,9 +85,13 @@ export async function createGameScene(engine: RenderEngine, canvas: HTMLCanvasEl
     const height = Math.max(1, canvas.clientHeight);
     const aspect = Math.max(0.44, width / height);
     const narrowViewport = aspect < 0.92;
-    // Super Run is a spectator sequence: show the hero, the next encounter, and the previous device rather than magnifying one shoe.
-    const baselineVertical = narrowViewport ? 21.6 : width < 760 ? 19.6 : 18.4;
-    const minimumHorizontalSpan = narrowViewport ? 13.2 : 35.6;
+    // Zoomed out ~30% from the previous values (18.4-21.6 / 13.2-35.6) -- "too close, not
+    // enough of the surrounding action visible" was the live complaint, wanting a wider,
+    // more cinematic frame (comic-book/Viewtiful-Joe-style action camera) rather than a
+    // tight shot on one shoe. This is the lever to retune if a size still reads too tight
+    // or too loose.
+    const baselineVertical = narrowViewport ? 28 : width < 760 ? 25.5 : 24;
+    const minimumHorizontalSpan = narrowViewport ? 17.2 : 46.3;
     const verticalSize = Math.max(baselineVertical, minimumHorizontalSpan / aspect);
     camera.orthoTop = verticalSize / 2;
     camera.orthoBottom = -verticalSize / 2;

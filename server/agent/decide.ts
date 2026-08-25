@@ -29,12 +29,31 @@ import { LlamaCppBackend } from "./backends/llamacpp";
 import { HostedApiBackend } from "./backends/hostedApi";
 import { agentConfig } from "./config";
 import { recordDecision, getMemory, getLatencyProfile, type MemoryEntry } from "./history";
+import { getLeaderboard } from "../runs";
 
 const backends: Record<DecisionRequest["backend"], AgentBackend> = {
   ollama: new OllamaBackend(),
   llamacpp: new LlamaCppBackend(),
   hosted: new HostedApiBackend(),
 };
+
+/** The competitive-context line the briefing below folds in -- "they would have to see it
+ * before the game so they can amp up." Live off the same runs table the /stats page and
+ * public leaderboard already read (server/runs.ts's getLeaderboard, agent-run completions
+ * only), so a model gets told what it's actually up against, not a static claim that goes
+ * stale the moment a faster run lands. Best-effort like every other history read in this
+ * codebase: an empty or unreachable board degrades to no line at all, never a thrown error
+ * that would break a live decision call. */
+function buildLeaderboardLine(request: DecisionRequest): string {
+  const board = getLeaderboard(5).filter((entry) => entry.mode === "agent");
+  if (board.length === 0) return "";
+  const ranked = board.map((entry, index) => `${index + 1}. ${entry.model ?? entry.backend} — ${entry.seconds.toFixed(1)}s`).join("; ");
+  const ownBest = board.find((entry) => entry.model === request.model && entry.backend === request.backend);
+  const standing = ownBest
+    ? ` Your own best finish so far is ${ownBest.seconds.toFixed(1)}s.`
+    : " You have no completed run on the board yet -- this could be your first.";
+  return `Leaderboard (fastest completions so far, agent runs only): ${ranked}.${standing} Faster is better, but a slower real finish always beats a fall or a loss -- don't trade safety for a shot at the top spot.`;
+}
 
 /** Shared framing prepended to every prompt regardless of decision type. Before this, a
  * model was dropped straight into a bare tactical question ("an enemy is ahead, pick
@@ -43,13 +62,18 @@ const backends: Record<DecisionRequest["backend"], AgentBackend> = {
  * answers had nothing to generalize from beyond the single instant. This is the general
  * "why" that lets the per-decision memory summary (see summarizeMemory) actually mean
  * something to the model, instead of being an unexplained statistic. */
-const GAME_BRIEFING = [
-  "You are playing Shoe Adventure, a side-scrolling platformer. You control Right Shoe on a rescue mission across 6 discrete screens, each a full toy-scale level in its own right (shoeboxes, a laundry lane, a rogue-skate tower, and more). Reach the exit archway at the far end of a screen to advance to the next one -- there is no backtracking to an earlier screen.",
-  "The 6th and final screen ends differently: instead of an exit archway, it holds the true boss guarding a rescue dome. Beat the boss, then reach Left Shoe inside the dome to reunite the pair and win the whole run. Screens 1-5 have no boss gate blocking the exit itself, though some have a tougher mini-boss enemy along the way.",
-  "There is no time limit. Nothing punishes you for slowing down to collect a useful pickup, fight an enemy carefully, or size up the situation before choosing -- rushing toward the exit is not automatically the safe or correct call, just one option among several. Weigh each decision on its own merits instead of defaulting to forward progress.",
-  "General strategy: pickups along the way unlock abilities and shoe-form transformations that make later fights and obstacles much easier, so a detour for one is often worth it even if it costs some distance. Enemies deal real damage -- hearts are limited, so running low means favoring a safe, reliable response over a risky one. Boss and mini-boss enemies are tougher and often go down cleanest to a specific ability rather than a plain attack.",
-  "You will be asked many small decisions like this over the course of one run, and this same situation will come up again in future runs too. When past outcomes for a similar situation are shown below, they reflect what has actually worked before across real attempts -- weigh them accordingly.",
-].join("\n");
+function buildGameBriefing(request: DecisionRequest): string {
+  return [
+    "You are playing Shoe Adventure, a side-scrolling platformer. You control Right Shoe on a rescue mission across 6 discrete screens, each a full toy-scale level in its own right (shoeboxes, a laundry lane, a rogue-skate tower, and more). Reach the exit archway at the far end of a screen to advance to the next one -- there is no backtracking to an earlier screen.",
+    "The 6th and final screen ends differently: instead of an exit archway, it holds the true boss guarding a rescue dome. Beat the boss, then reach Left Shoe inside the dome to reunite the pair and win the whole run. Screens 1-5 have no boss gate blocking the exit itself, though some have a tougher mini-boss enemy along the way.",
+    "There is no time limit. Nothing punishes you for slowing down to collect a useful pickup, fight an enemy carefully, or size up the situation before choosing -- rushing toward the exit is not automatically the safe or correct call, just one option among several. Weigh each decision on its own merits instead of defaulting to forward progress.",
+    "General strategy: pickups along the way unlock abilities and shoe-form transformations that make later fights and obstacles much easier, so a detour for one is often worth it even if it costs some distance. Enemies deal real damage -- hearts are limited, so running low means favoring a safe, reliable response over a risky one. Boss and mini-boss enemies are tougher and often go down cleanest to a specific ability rather than a plain attack.",
+    "You will be asked many small decisions like this over the course of one run, and this same situation will come up again in future runs too. When past outcomes for a similar situation are shown below, they reflect what has actually worked before across real attempts -- weigh them accordingly.",
+    buildLeaderboardLine(request) || null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 /** The self-tuning per-request timeout: generous (agentConfig.decisionTimeoutMs) until a
  * specific backend+model has built up enough real successful-call history to trust, then
@@ -144,10 +168,12 @@ function sampleBeta(alpha: number, beta: number): number {
 // for priorityAction even with the ranked memory line and an imperative "prefer the
 // top-ranked option" instruction sitting right in the prompt, and of those advance picks,
 // player_damaged (136/273) roughly tied avoided (130/273) -- a coin flip, not a safe
-// default. A 2-3B local model reliably reading a paragraph of numbers and reasoning "the
-// third-ranked option is nonetheless correct here" turned out to be optimistic; telling it
-// harder wasn't moving the needle. This threshold decides when decide() overrides a live
-// answer outright instead of just suggesting -- see its call site.
+// default. This was originally the threshold for silently overriding a live answer outright
+// (see decide()'s own comment on why that got walked back to just recording the
+// disagreement instead) -- kept as the gate for *flagging* a real disagreement worth a
+// second look, not for acting on it unilaterally. The interesting open question, per the
+// user, is whether the agent's own reasoning can close this gap over time without the data
+// ever touching what it actually does.
 const CONFIDENCE_OVERRIDE_MIN_SAMPLES = 8;
 const CONFIDENCE_OVERRIDE_GAP = 0.25;
 
@@ -188,7 +214,7 @@ function buildEnemyResponsePrompt(request: DecisionRequest, memoryLine: string):
   const { player, enemy } = request.state as EnemyResponseState;
   const bossNote = enemy.bossTier ? ` It is a ${enemy.bossTier} boss named ${enemy.bossName}.` : "";
   return [
-    GAME_BRIEFING,
+    buildGameBriefing(request),
     "",
     "Right Shoe is about to encounter an enemy.",
     `Right Shoe has ${player.hearts}/${player.maxHearts} hearts left and is currently in ${player.shoeForm} form.${bossNote}`,
@@ -228,7 +254,7 @@ function buildPriorityActionPrompt(request: DecisionRequest, memoryLine: string)
     ? nearbyTerrain.map((t) => `${terrainLabel[t.kind]} (${t.distance.toFixed(1)} units ahead)`).join(", ")
     : "clear ground ahead";
   return [
-    GAME_BRIEFING,
+    buildGameBriefing(request),
     "",
     "Right Shoe needs a general goal. Take whatever time you need to reason about it -- there is no clock running.",
     `Right Shoe has ${player.hearts}/${player.maxHearts} hearts and is in ${player.shoeForm} form, currently ${player.grounded ? "standing on solid ground" : "airborne"}.`,
@@ -289,8 +315,8 @@ export async function decide(request: DecisionRequest): Promise<DecisionResponse
   const { line: memoryLine, entries: memoryEntries } = summarizeMemory(contextKeys);
 
   if (!backend) {
-    const id = recordDecision({ runId: request.runId, decisionType: request.decisionType, ...base, choice: null, fallback: true, outcome: "unknown", latencyMs: 0, contextKey: contextKeys.specific, contextKeyGeneral: contextKeys.general });
-    return { choice: null, fallback: true, ...base, latencyMs: 0, decisionId: id ?? undefined };
+    const id = recordDecision({ runId: request.runId, decisionType: request.decisionType, ...base, choice: null, fallback: true, disagreesWithMemory: false, outcome: "unknown", latencyMs: 0, contextKey: contextKeys.specific, contextKeyGeneral: contextKeys.general });
+    return { choice: null, fallback: true, disagreesWithMemory: false, ...base, latencyMs: 0, decisionId: id ?? undefined };
   }
 
   const handler = DECISION_HANDLERS[request.decisionType];
@@ -300,12 +326,16 @@ export async function decide(request: DecisionRequest): Promise<DecisionResponse
   let choice = handler.parse(raw) as DecisionResponse["choice"];
   let fallback = choice === null;
 
-  // Confidence override (see CONFIDENCE_OVERRIDE_MIN_SAMPLES's comment for the data behind
-  // this): even a real, parseable live answer gets replaced when the model's own established
-  // track record in this exact context is well-sampled AND clearly worse than another
-  // currently-legal option's. Gated on the CHOSEN option itself having enough samples to be
-  // a confirmed habit rather than a one-off or genuine cold-start exploration -- an untried
-  // option is never penalized for lacking data, only a demonstrably bad, well-worn one.
+  // No longer a "confidence override" -- an earlier version of this replaced the model's
+  // own answer with the data-preferred one outright, which is exactly the "spoon-feeding"
+  // the user explicitly doesn't want: the point is watching the agent get better at
+  // *reasoning*, not at being quietly corrected every time it disagrees with the numbers.
+  // What's worth keeping is the disagreement itself as a real signal -- akin to a
+  // "Second Opinion" note to a future self: record when the model's choice and the data's
+  // top-ranked choice diverge, and by how much, without touching what actually executes.
+  // Same gating as before (well-sampled on both sides, not penalizing genuine cold-start
+  // exploration) -- only now it's an observation, not an action.
+  let disagreesWithMemory = false;
   if (choice !== null && memoryEntries.length > 0) {
     const legal = new Set(legalOptionsNow(request));
     const best = memoryEntries.find((entry) => entry.choice !== choice && legal.has(entry.choice));
@@ -317,8 +347,7 @@ export async function decide(request: DecisionRequest): Promise<DecisionResponse
       current.samples >= CONFIDENCE_OVERRIDE_MIN_SAMPLES &&
       best.successRate - current.successRate >= CONFIDENCE_OVERRIDE_GAP
     ) {
-      choice = best.choice as DecisionResponse["choice"];
-      fallback = true;
+      disagreesWithMemory = true;
     }
   }
 
@@ -344,6 +373,7 @@ export async function decide(request: DecisionRequest): Promise<DecisionResponse
       model: request.model,
       choice,
       fallback,
+      disagreesWithMemory,
       latencyMs,
       timeoutMs,
     }),
@@ -352,9 +382,9 @@ export async function decide(request: DecisionRequest): Promise<DecisionResponse
   // Outcome starts "unknown" here regardless of decisionType -- the client reports back
   // what really happened shortly after via POST /api/agent/decide/:id/outcome (see
   // history.ts's recordOutcome), for both enemyResponse and priorityAction now.
-  const id = recordDecision({ runId: request.runId, decisionType: request.decisionType, ...base, choice, fallback, outcome: "unknown", latencyMs, contextKey: contextKeys.specific, contextKeyGeneral: contextKeys.general });
+  const id = recordDecision({ runId: request.runId, decisionType: request.decisionType, ...base, choice, fallback, disagreesWithMemory, outcome: "unknown", latencyMs, contextKey: contextKeys.specific, contextKeyGeneral: contextKeys.general });
 
-  return { choice, fallback, ...base, latencyMs, decisionId: id ?? undefined, prompt, raw };
+  return { choice, fallback, disagreesWithMemory, ...base, latencyMs, decisionId: id ?? undefined, prompt, raw };
 }
 
 /** Fired once, right when a player picks a model and starts an Agent Run (see the

@@ -1,13 +1,17 @@
-/* The Lost Pair visual reminder: cinematic toy-scale platformer, tactile cardboard/leather/thread textures, deep navy twilight, warm cream lamp light, and Rescue Coral #FF5A4F for heroism and reunion. */
+/* The Lost Pair visual reminder: cinematic toy-scale platformer, tactile cardboard/leather/thread textures, a lit-up evening blue (not pitch-black night), warm cream lamp light, and Rescue Coral #FF5A4F for heroism and reunion. */
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght,SOFT,WONK@9..144,600..800,0..100,0..1&display=swap");
 @import "tailwindcss";
 
 :root {
   color: #fff5dd;
-  background: #070d22;
+  background: #14224a;
   font-family: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-synthesis: none;
   text-rendering: geometricPrecision;
+  /* Every HUD size in this file is in rem, keyed off this -- bumped from the 16px browser
+     default because "the text is really too small for most people" at normal 100% zoom.
+     One lever, scales the whole UI proportionally instead of hunting down every rule. */
+  font-size: 18px;
 }
 
 * { box-sizing: border-box; }
@@ -20,7 +24,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #070d22;
+  background: #14224a;
 }
 
 button,
@@ -43,9 +47,9 @@ button:focus-visible {
   overflow: hidden;
   isolation: isolate;
   background:
-    radial-gradient(circle at 83% 16%, rgba(255, 113, 85, 0.22), transparent 27%),
-    radial-gradient(circle at 15% 20%, rgba(53, 179, 191, 0.18), transparent 31%),
-    #070d22;
+    radial-gradient(circle at 83% 16%, rgba(255, 113, 85, 0.28), transparent 30%),
+    radial-gradient(circle at 15% 20%, rgba(53, 179, 191, 0.24), transparent 34%),
+    #14224a;
 }
 
 .game-backdrop {
@@ -53,9 +57,12 @@ button:focus-visible {
   inset: 0;
   z-index: 0;
   background:
-    linear-gradient(90deg, rgba(2, 7, 22, 0.2), rgba(2, 7, 22, 0.06) 55%, rgba(2, 7, 22, 0.24)),
-    radial-gradient(circle at 60% 40%, #285a68, #070d22 72%);
-  filter: saturate(1.07) contrast(1.04) brightness(0.75);
+    linear-gradient(90deg, rgba(2, 7, 22, 0.12), rgba(2, 7, 22, 0.03) 55%, rgba(2, 7, 22, 0.14)),
+    radial-gradient(circle at 60% 40%, #3f7a8c, #14224a 72%);
+  /* Was brightness(0.75) -- a flat 25% cut on top of an already-dark navy backdrop. This
+     was the single biggest contributor to "too dark, feels like night-only" (see index.css's
+     own header comment, which described this as deliberate twilight -- not what was wanted). */
+  filter: saturate(1.05) contrast(1.02) brightness(1.05);
 }
 
 .game-canvas {
@@ -205,7 +212,7 @@ button:focus-visible {
 .stage-hero-wrap em,
 .stage-rescue-beacon em {
   color: #ffd988;
-  font-size: 0.53rem;
+  font-size: 0.667rem;
   font-style: normal;
   font-weight: 500;
   letter-spacing: 0.18em;
@@ -254,7 +261,7 @@ button:focus-visible {
   color: rgba(255, 245, 221, 0.52);
   background: rgba(6, 14, 36, 0.56);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 18px rgba(0, 0, 0, 0.2);
-  font-size: 0.42rem;
+  font-size: 0.667rem;
   letter-spacing: 0.1em;
   transform: rotate(-1deg);
 }
@@ -302,9 +309,129 @@ button:focus-visible {
 
 .stage-rescue-beacon small {
   color: #ffb779;
-  font-size: 0.43rem;
+  font-size: 0.667rem;
   letter-spacing: 0.13em;
   text-shadow: 0 2px 8px #050d22;
+}
+
+/* The six-screen route line -- see GameCanvas.tsx's own comment on why this replaces
+   .stage-storyline's 4-contraption strip above instead of extending it. First pass used a
+   horizontal pill strip; the user preferred the original crooked dotted-line look (see the
+   legacy .stage-lace-route above) but wanted labels and a current-location highlight
+   actually on the line, rather than the plain undecorated dots that had -- this rebuilds
+   that same crooked-dotted-line feel with those two things merged onto it directly. */
+/* Docked as its own strip with a real top border -- "the herringbone map should not
+   interfere with the game board; we had a line delineation before" -- rather than floating
+   tilted text loose over the 3D scene the way the first two passes did. The border IS the
+   delineation; everything in the strip stays within its own bounded band below it. */
+.route-line-strip {
+  position: fixed;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  bottom: 3.6rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.5rem clamp(1rem, 4vw, 3rem) 0.3rem;
+  border-top: 1px solid rgba(255, 207, 99, 0.35);
+  background: linear-gradient(180deg, rgba(7, 16, 37, 0.72), rgba(7, 16, 37, 0.42) 70%, transparent);
+}
+
+.route-line-start,
+.route-line-end {
+  font-size: 0.667rem;
+  letter-spacing: 0.1em;
+  color: rgba(255, 245, 221, 0.55);
+  flex: none;
+  text-shadow: 0 2px 8px #050d22;
+}
+
+.route-line-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  height: 4.4rem;
+  padding: 0 0.4rem;
+  /* Deliberately not overflow-x:auto -- CSS coerces a "visible" opposite axis to auto
+     the moment one axis scrolls, which clipped every upward-facing herringbone label
+     above the track's own box. Six items fit within the strip's max-width comfortably;
+     the mobile breakpoint below hides labels anyway on the widths where they wouldn't. */
+  overflow: visible;
+}
+
+/* The spine every node's dot sits on -- dotted, matching the legacy .stage-lace-route. */
+.route-line-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 0;
+  border-top: 3px dotted #ffcf63;
+  filter: drop-shadow(0 0 8px rgba(255, 207, 99, 0.4));
+}
+
+.route-line-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 0.62rem;
+}
+
+.route-line-dot {
+  position: relative;
+  z-index: 1;
+  width: 0.62rem;
+  height: 0.62rem;
+  border: 2px solid #ff5a4f;
+  border-radius: 50%;
+  background: #fff3d5;
+  box-shadow: 0 0 0 4px rgba(255, 90, 79, 0.12);
+}
+
+/* Herringbone, take two: the user wanted the label words themselves to BE the tilted rib
+   bones (not a thin line with small text tacked on), sized to actually read against the
+   board rather than the first pass's tiny caption text. Anchored at its own left edge (the
+   end nearest the spine dot) so rotation swings the whole word out and up/down like a rib,
+   alternating per node via GameCanvas.tsx's side="up"/"down". */
+.route-line-rib {
+  position: absolute;
+  left: 50%;
+  font-family: "Fraunces", serif;
+  font-size: clamp(0.8rem, 1.15vw, 1.05rem);
+  font-weight: 650;
+  white-space: nowrap;
+  color: rgba(255, 245, 221, 0.55);
+  text-shadow: 0 2px 10px #050d22, 0 0 16px rgba(255, 207, 99, 0.2);
+  transition: color 200ms ease;
+  pointer-events: none;
+}
+
+/* Shallower angle than the first pass (was 34deg) -- keeps the whole strip's vertical
+   reach inside its own docked panel above instead of poking up over the game board. */
+.route-line-node--up .route-line-rib { bottom: 52%; transform-origin: left bottom; transform: translateX(0.3rem) rotate(-18deg); }
+.route-line-node--down .route-line-rib { top: 52%; transform-origin: left top; transform: translateX(0.3rem) rotate(18deg); }
+
+.route-line-node--done .route-line-dot { background: #ffcf63; border-color: #ffcf63; box-shadow: 0 0 8px rgba(255, 207, 99, 0.7); }
+.route-line-node--done .route-line-rib { color: #ffcf63; }
+
+.route-line-node--current .route-line-dot {
+  background: #ff5a4f;
+  box-shadow: 0 0 10px rgba(255, 90, 79, 0.85);
+  animation: beacon-bob 1.6s ease-in-out infinite;
+}
+.route-line-node--current .route-line-rib { color: #ff8a7a; font-weight: 700; }
+
+@media (max-width: 640px) {
+  .route-line-start, .route-line-end { display: none; }
+  .route-line-strip { bottom: 3.2rem; padding: 0.4rem 0.8rem 0.25rem; }
+  .route-line-track { height: 3.4rem; gap: 1.1rem; }
+  .route-line-rib { font-size: 0.667rem; }
 }
 
 .graphics-badge {
@@ -317,7 +444,7 @@ button:focus-visible {
   color: rgba(204, 252, 255, 0.88);
   background: rgba(5, 15, 36, 0.62);
   box-shadow: 0 0 28px rgba(42, 197, 224, 0.12);
-  font-size: 0.58rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.11em;
 }
@@ -345,14 +472,14 @@ button:focus-visible {
   padding-right: 0.45rem;
   border-right: 1px solid rgba(255, 224, 144, 0.42);
   color: #ffcf63;
-  font-size: 0.54rem;
+  font-size: 0.667rem;
   font-weight: 700;
   letter-spacing: 0.14em;
 }
 
 .super-run-ribbon b {
   overflow: hidden;
-  font-size: 0.56rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.04em;
   text-overflow: ellipsis;
@@ -366,7 +493,7 @@ button:focus-visible {
   width: 1.1rem;
   height: 1.1rem;
   border-radius: 50%;
-  font-size: 0.62rem;
+  font-size: 0.667rem;
   line-height: 1;
   color: #0a1220;
   background: #9be8ff;
@@ -411,8 +538,8 @@ button:focus-visible {
   padding: 0.4rem 0.55rem;
   border-bottom: 1px dashed rgba(255, 224, 144, 0.35);
 }
-.agent-log-header span { color: #ffcf63; font-size: 0.44rem; font-weight: 700; letter-spacing: 0.14em; }
-.agent-log-header em { overflow: hidden; color: #9be8ff; font-size: 0.4rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.agent-log-header span { color: #ffcf63; font-size: 0.667rem; font-weight: 700; letter-spacing: 0.14em; }
+.agent-log-header em { overflow: hidden; color: #9be8ff; font-size: 0.667rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .agent-log-body {
   overflow-y: auto;
@@ -422,7 +549,7 @@ button:focus-visible {
 .agent-log-line {
   padding: 0.16rem 0;
   color: rgba(255, 245, 221, 0.82);
-  font-size: 0.42rem;
+  font-size: 0.667rem;
   line-height: 1.4;
   word-break: break-word;
 }
@@ -496,8 +623,8 @@ button:focus-visible {
   background: rgba(15, 47, 69, 0.4);
   width: fit-content;
 }
-.level-badge span { color: #9be8ff; font-size: 0.5rem; font-weight: 700; letter-spacing: 0.12em; }
-.level-badge b { color: #fff5dd; font-size: 0.5rem; font-weight: 500; }
+.level-badge span { color: #9be8ff; font-size: 0.667rem; font-weight: 700; letter-spacing: 0.12em; }
+.level-badge b { color: #fff5dd; font-size: 0.667rem; font-weight: 500; }
 
 .agent-chip {
   overflow: hidden;
@@ -506,7 +633,7 @@ button:focus-visible {
   border-radius: 999px;
   background: rgba(28, 74, 92, 0.55);
   color: #9be8ff;
-  font-size: 0.44rem;
+  font-size: 0.667rem;
   font-style: normal;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -558,7 +685,7 @@ button:focus-visible {
 
 .hud-eyebrow {
   color: #ffb579;
-  font-size: 0.62rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.18em;
 }
@@ -586,7 +713,7 @@ button:focus-visible {
 .hud-mission p {
   margin: 0.45rem 0 0;
   color: rgba(255, 245, 221, 0.78);
-  font-size: 0.6rem;
+  font-size: 0.667rem;
   line-height: 1.48;
 }
 
@@ -632,7 +759,7 @@ button:focus-visible {
 
 .rescue-meter b {
   color: #ffce77;
-  font-size: 0.48rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.12em;
 }
@@ -646,7 +773,7 @@ button:focus-visible {
   padding-top: 0.48rem;
   border-top: 1px dashed rgba(255, 207, 99, 0.34);
   color: #ffe6b0;
-  font-size: 0.45rem;
+  font-size: 0.667rem;
   letter-spacing: 0.085em;
 }
 
@@ -668,7 +795,7 @@ button:focus-visible {
   padding: 0.17rem 0.22rem;
   border: 1px solid rgba(255, 207, 99, 0.45);
   color: #ffcf63;
-  font-size: 0.39rem;
+  font-size: 0.667rem;
   font-style: normal;
   white-space: nowrap;
 }
@@ -684,12 +811,12 @@ button:focus-visible {
   border: 1px solid rgba(208, 130, 255, 0.48);
   background: linear-gradient(90deg, rgba(75, 34, 114, 0.62), rgba(15, 31, 64, 0.35));
   color: #f1d6ff;
-  font-size: 0.4rem;
+  font-size: 0.667rem;
   letter-spacing: 0.095em;
 }
 
 .boss-readout span { color: #caa5ff; font-weight: 700; }
-.boss-readout b { color: #fff0c9; font-size: 0.43rem; font-weight: 500; text-shadow: 0 0 9px rgba(222, 143, 255, 0.58); }
+.boss-readout b { color: #fff0c9; font-size: 0.667rem; font-weight: 500; text-shadow: 0 0 9px rgba(222, 143, 255, 0.58); }
 .boss-readout.boss-cleared { border-color: rgba(101, 221, 240, 0.64); background: linear-gradient(90deg, rgba(23, 111, 128, 0.64), rgba(15, 47, 69, 0.34)); }
 .boss-readout.boss-cleared span, .boss-readout.boss-cleared b { color: #dffeff; }
 
@@ -704,13 +831,13 @@ button:focus-visible {
   border: 1px dashed rgba(101, 221, 240, 0.62);
   color: #dffeff;
   background: linear-gradient(100deg, rgba(18, 86, 111, 0.5), rgba(15, 31, 64, 0.42));
-  font-size: 0.4rem;
+  font-size: 0.667rem;
   letter-spacing: 0.09em;
 }
 
 .super-run-stage span { color: #ffcf63; font-weight: 700; }
-.super-run-stage b { min-width: 0; overflow: hidden; color: #fff0c9; font-size: 0.43rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.super-run-stage i { grid-column: 1 / -1; color: rgba(223, 254, 255, 0.78); font-size: 0.35rem; font-style: normal; letter-spacing: 0.08em; }
+.super-run-stage b { min-width: 0; overflow: hidden; color: #fff0c9; font-size: 0.667rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.super-run-stage i { grid-column: 1 / -1; color: rgba(223, 254, 255, 0.78); font-size: 0.667rem; font-style: normal; letter-spacing: 0.08em; }
 
  .hud-powerups {
   top: 4.15rem;
@@ -725,7 +852,7 @@ button:focus-visible {
   gap: 0.4rem;
   margin-top: 0.48rem;
   color: rgba(229, 255, 255, 0.72);
-  font-size: 0.53rem;
+  font-size: 0.667rem;
   letter-spacing: 0.04em;
 }
 
@@ -748,14 +875,14 @@ button:focus-visible {
   margin-top: 0.54rem;
   padding-top: 0.42rem;
   border-top: 1px dashed rgba(255, 235, 193, 0.26);
-  font-size: 0.46rem;
+  font-size: 0.667rem;
   letter-spacing: 0.08em;
 }
 
 .upgrade-readout b {
   grid-column: 1 / -1;
   color: #ffcf63;
-  font-size: 0.52rem;
+  font-size: 0.667rem;
   font-weight: 500;
 }
 
@@ -833,7 +960,7 @@ button:focus-visible {
   padding-left: 0.65rem;
   border-left: 1px solid rgba(255, 245, 221, 0.22);
   color: #ffd77c;
-  font-size: 0.58rem;
+  font-size: 0.667rem;
   letter-spacing: 0.08em;
 }
 
@@ -846,7 +973,7 @@ button:focus-visible {
   bottom: 1rem;
   padding: 0.56rem 0.7rem;
   color: #fff5dd;
-  font-size: 0.58rem;
+  font-size: 0.667rem;
   letter-spacing: 0.12em;
   transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -859,7 +986,7 @@ button:focus-visible {
   bottom: 1rem;
   padding: 0.56rem 0.7rem;
   color: #fff5dd;
-  font-size: 0.58rem;
+  font-size: 0.667rem;
   letter-spacing: 0.12em;
   transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -1044,7 +1171,7 @@ button:focus-visible {
   background: rgba(14, 28, 58, 0.66);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   color: #fff4d7;
-  font-size: 0.43rem;
+  font-size: 0.667rem;
   letter-spacing: 0.1em;
 }
 .story-rescue-stitchline span { color: #ffb779; font-weight: 700; }
@@ -1082,7 +1209,7 @@ button:focus-visible {
 .story-shoe-card b {
   margin-top: -0.32rem;
   color: #fff5dd;
-  font-size: 0.52rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.15em;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
@@ -1092,7 +1219,7 @@ button:focus-visible {
   display: block;
   margin-top: 0.18rem;
   color: #ffcf63;
-  font-size: 0.4rem;
+  font-size: 0.667rem;
   letter-spacing: 0.11em;
 }
 
@@ -1239,7 +1366,7 @@ button:focus-visible {
   overflow: hidden;
   padding: 0.88rem 1.05rem;
   color: #fff7e7;
-  font-size: 0.66rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.11em;
   transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 160ms cubic-bezier(0.23, 1, 0.32, 1), background-color 160ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -1260,6 +1387,13 @@ button:focus-visible {
 .secondary-action {
   border: 1px dashed rgba(255, 235, 193, 0.48);
   background: rgba(7, 16, 37, 0.58);
+}
+
+.stats-link-action {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .quit-action {
@@ -1305,7 +1439,7 @@ button:focus-visible {
 .agent-picker-status {
   margin: 0 0 0.5rem;
   color: #cdeeff;
-  font-size: 0.6rem;
+  font-size: 0.667rem;
   line-height: 1.5;
 }
 
@@ -1347,14 +1481,14 @@ button:focus-visible {
   overflow: hidden;
   flex: 1;
   color: #fff7e7;
-  font-size: 0.58rem;
+  font-size: 0.667rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .agent-picker-size {
   color: rgba(255, 247, 231, 0.55);
-  font-size: 0.54rem;
+  font-size: 0.667rem;
 }
 
 .agent-picker-actions {
@@ -1366,7 +1500,7 @@ button:focus-visible {
 
 .agent-picker-confirm {
   padding: 0.6rem 0.85rem;
-  font-size: 0.58rem;
+  font-size: 0.667rem;
 }
 
 .agent-picker-confirm:disabled,
@@ -1379,7 +1513,7 @@ button:focus-visible {
    the common path, so it shouldn't compete visually with it. */
 .agent-picker-repeat {
   padding: 0.6rem 0.7rem;
-  font-size: 0.54rem;
+  font-size: 0.667rem;
   background: rgba(126, 224, 255, 0.08);
   border: 1px solid rgba(126, 224, 255, 0.4);
   color: #9be8ff;
@@ -1403,12 +1537,12 @@ button:focus-visible {
   background: rgba(10, 22, 46, 0.88);
   backdrop-filter: blur(4px);
   color: #ffd77c;
-  font-size: 0.5rem;
+  font-size: 0.667rem;
   letter-spacing: 0.06em;
   pointer-events: auto;
 }
 
-.auto-repeat-chip b { color: #fff5dd; font-size: 0.56rem; }
+.auto-repeat-chip b { color: #fff5dd; font-size: 0.667rem; }
 .auto-repeat-chip i { color: rgba(255, 245, 221, 0.6); font-style: normal; }
 
 .auto-repeat-chip button {
@@ -1417,7 +1551,7 @@ button:focus-visible {
   border-radius: 0.3rem;
   background: rgba(255, 90, 79, 0.16);
   color: #ffb0a8;
-  font-size: 0.46rem;
+  font-size: 0.667rem;
   letter-spacing: 0.06em;
   cursor: pointer;
 }
@@ -1430,11 +1564,28 @@ button:focus-visible {
   gap: 0.75rem 1rem;
   margin-top: 1.35rem;
   color: rgba(255, 244, 217, 0.64);
-  font-size: 0.57rem;
+  font-size: 0.667rem;
   letter-spacing: 0.075em;
 }
 
 .controls-guide span { display: inline-flex; align-items: center; gap: 0.22rem; }
+
+.title-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.6rem;
+  font-size: 0.667rem;
+  letter-spacing: 0.08em;
+}
+
+.title-footer a {
+  color: rgba(255, 244, 217, 0.48);
+  text-decoration: none;
+}
+
+.title-footer a:hover { color: #fff5dd; text-decoration: underline; }
+.title-footer span { color: rgba(255, 244, 217, 0.3); }
 
 kbd {
   min-width: 1.15rem;
@@ -1442,7 +1593,7 @@ kbd {
   border: 1px solid rgba(255, 232, 181, 0.36);
   background: rgba(255, 246, 223, 0.11);
   color: #fff4dc;
-  font-size: 0.55rem;
+  font-size: 0.667rem;
   text-align: center;
 }
 
@@ -1479,28 +1630,27 @@ kbd {
 
  .touch-cluster .dash-touch,
  .touch-cluster .jump-touch,
- .touch-cluster .lash-touch,
- .touch-cluster .stomp-touch,
+ .touch-cluster .special-move-touch,
  .touch-cluster .form-touch,
  .touch-cluster .ultra-touch {
   width: 3.7rem;
   height: 3.7rem;
   border-radius: 50%;
-  font-size: 0.56rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.08em;
 }
 
  .touch-cluster .dash-touch { border-color: rgba(140, 245, 255, 0.5); color: #c5fbff; }
  .touch-cluster .jump-touch { border-color: rgba(255, 160, 121, 0.62); background: rgba(233, 76, 67, 0.69); }
- .touch-cluster .lash-touch { border-color: rgba(255, 232, 180, 0.7); color: #fff4d8; background: rgba(160, 58, 58, 0.74); }
- .touch-cluster .stomp-touch { border-color: rgba(164, 244, 141, 0.7); color: #eaffd4; background: rgba(47, 111, 80, 0.78); }
+ .touch-cluster .special-move-touch { border-color: rgba(255, 232, 180, 0.7); color: #fff4d8; background: rgba(160, 58, 58, 0.74); flex-direction: column; gap: 0.1rem; font-size: 0.667rem; }
+ .touch-cluster .special-move-touch b { font-size: 0.85rem; }
  .touch-cluster .form-touch { border-color: rgba(255, 159, 111, 0.82); color: #fff0d2; background: rgba(179, 62, 47, 0.8); }
  .touch-cluster .ultra-touch { border-color: rgba(218, 164, 255, 0.9); color: #f7e8ff; background: rgba(100, 49, 151, 0.86); box-shadow: 0 0 16px rgba(179, 95, 255, 0.44); }
 .touch-cluster button:active { transform: scale(0.94); }
 
 @media (max-width: 860px) {
-  .graphics-badge { top: 0.7rem; right: 0.7rem; font-size: 0.48rem; }
+  .graphics-badge { top: 0.7rem; right: 0.7rem; font-size: 0.667rem; }
   .super-run-ribbon { top: 0.65rem; width: min(28rem, 61vw); }
   .stage-box-left { left: 18vw; }
   .stage-box-right { right: 4vw; }
@@ -1539,8 +1689,8 @@ kbd {
 @media (max-width: 640px), (max-height: 580px) {
   .graphics-badge { display: none; }
   .super-run-ribbon { top: 0.5rem; width: min(21rem, 85vw); padding: 0.45rem 0.56rem; gap: 0.28rem; }
-  .super-run-ribbon span { font-size: 0.44rem; }
-  .super-run-ribbon b { font-size: 0.44rem; }
+  .super-run-ribbon span { font-size: 0.667rem; }
+  .super-run-ribbon b { font-size: 0.667rem; }
   .super-run-ribbon i { width: 0.25rem; height: 0.25rem; }
   .stage-box { display: none; }
   .stage-hero-wrap { bottom: 15.5vh; left: 19vw; }
@@ -1555,7 +1705,7 @@ kbd {
   .story-logo { width: 3.2rem; margin-bottom: 0.85rem; }
   .story-copy h1 { font-size: clamp(2.8rem, 15vw, 4.7rem); }
   .story-intro { font-size: 0.7rem; line-height: 1.56; }
-  .story-rescue-stitchline { margin-top: 0.5rem; font-size: 0.36rem; gap: 0.34rem; padding: 0.25rem 0.34rem; }
+  .story-rescue-stitchline { margin-top: 0.5rem; font-size: 0.667rem; gap: 0.34rem; padding: 0.25rem 0.34rem; }
   .story-hero-strip { height: 4.6rem; margin-top: 0.7rem; }
   .story-righty { width: 5rem; }
   .story-lefty { width: 4.4rem; }
@@ -1571,7 +1721,7 @@ kbd {
   .story-actions { margin-top: 1rem; }
   .primary-action,
   .secondary-action,
-  .super-run-action { padding: 0.74rem 0.78rem; font-size: 0.56rem; }
+  .super-run-action { padding: 0.74rem 0.78rem; font-size: 0.667rem; }
   .game-hud { transform: scale(0.88); transform-origin: top left; width: 113.64%; height: 113.64%; }
   .hud-powerups { display: none; }
   .agent-log-panel { display: none; }
@@ -1604,6 +1754,7 @@ kbd {
   gap: 0.9rem;
   width: 100%;
 }
+
 
 /* A side-profile sneaker silhouette built to match the real in-game hero shoe's own
    shapes (see GameWorld.ts's createPlayer/createLeftShoe: cream sole, rounded upper body,
@@ -1703,7 +1854,7 @@ kbd {
   right: 0.72rem;
   bottom: 0.96rem;
   color: #fff4d7;
-  font-size: 0.53rem;
+  font-size: 0.667rem;
   font-weight: 500;
   letter-spacing: 0.18em;
   text-shadow: 0 2px 9px #050d22;
@@ -1715,7 +1866,7 @@ kbd {
   right: 0.72rem;
   bottom: 0.42rem;
   color: #a8f6ff;
-  font-size: 0.36rem;
+  font-size: 0.667rem;
   letter-spacing: 0.14em;
   text-shadow: 0 2px 9px #050d22;
 }
@@ -1745,7 +1896,7 @@ kbd {
   border: 1px dashed rgba(255, 226, 160, 0.5);
   border-radius: 0.4rem;
   background: rgba(6, 17, 45, 0.42);
-  font-size: 0.4rem;
+  font-size: 0.667rem;
   letter-spacing: 0.1em;
   color: #d8e6ff;
 }
@@ -1758,14 +1909,14 @@ kbd {
 
 .run-results b {
   color: #fff4d7;
-  font-size: 0.56rem;
+  font-size: 0.667rem;
   letter-spacing: 0.06em;
 }
 
 .run-results-top i {
   font-style: normal;
   color: #a8f6ff;
-  font-size: 0.34rem;
+  font-size: 0.667rem;
   letter-spacing: 0.12em;
 }
 
@@ -1789,19 +1940,19 @@ kbd {
 
 .run-leaderboard-rank {
   color: rgba(216, 230, 255, 0.55);
-  font-size: 0.36rem;
+  font-size: 0.667rem;
 }
 
 .run-leaderboard-time {
   color: #fff4d7;
-  font-size: 0.5rem;
+  font-size: 0.667rem;
   letter-spacing: 0.04em;
 }
 
 .run-leaderboard-who {
   overflow: hidden;
   color: #a8f6ff;
-  font-size: 0.34rem;
+  font-size: 0.667rem;
   letter-spacing: 0.1em;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1809,20 +1960,20 @@ kbd {
 
 .run-leaderboard-hearts {
   color: #ff8f86;
-  font-size: 0.38rem;
+  font-size: 0.667rem;
   letter-spacing: 0.06em;
 }
 
  @media (max-width: 640px), (max-height: 580px) {
   .reunion-dance { width: min(23rem, 84vw); min-height: 9.5rem; margin-top: 0.7rem; }
   .reunion-shoe { width: clamp(2.7rem, 12vw, 3.9rem); height: clamp(2.7rem, 12vw, 3.9rem); }
-  .reunion-dance b { font-size: 0.43rem; }
+  .reunion-dance b { font-size: 0.667rem; }
   .story-hero-strip { width: min(25rem, 94%); min-height: 6.1rem; margin-top: 0.8rem; }
   .story-shoe-card { min-width: 5.85rem; padding: 0.18rem 0.22rem 0.3rem; }
   .story-righty { width: 5.75rem; }
   .story-lefty { width: 5.1rem; }
-  .story-shoe-card b { font-size: 0.38rem; }
-  .story-shoe-card small { font-size: 0.31rem; }
+  .story-shoe-card b { font-size: 0.667rem; }
+  .story-shoe-card small { font-size: 0.667rem; }
   .story-rule { min-width: 1.3rem; margin: 0 0.34rem; }
 }
 
@@ -1873,6 +2024,200 @@ kbd {
 @keyframes pair-dance-mirror {
   0% { transform: translateX(4px) rotate(13deg) scaleX(-1) scale(1); }
   100% { transform: translateX(-5px) rotate(5deg) scaleX(-1) scale(1.035); }
+}
+
+/* Agent Stats page (client/src/pages/StatsPage.tsx) -- a real scrollable document, unlike
+   every other screen in this app. html/body/#root are globally overflow:hidden for the
+   immersive game shell, so this needs its own scroll container rather than inheriting one. */
+.stats-page {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  background: #14224a;
+  color: #fff5dd;
+  padding: 2.4rem clamp(1rem, 5vw, 4rem) 4rem;
+}
+
+.stats-page-header {
+  max-width: 72rem;
+  margin: 0 auto 2rem;
+}
+
+.stats-back-button {
+  background: transparent;
+  color: #9cf7ff;
+  font: inherit;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  padding: 0.4rem 0;
+  margin-bottom: 1rem;
+}
+
+.stats-back-button:hover { color: #fff5dd; }
+
+.stats-page-header h1 {
+  font-family: "Fraunces", serif;
+  font-size: clamp(2rem, 4vw, 3rem);
+  margin: 0 0 0.5rem;
+  color: #fff3d5;
+}
+
+.stats-page-header p {
+  color: rgba(255, 245, 221, 0.68);
+  margin: 0.2rem 0;
+  max-width: 42rem;
+}
+
+.stats-total { color: #ffcf63 !important; }
+
+.stats-error { color: #ff8a7a; max-width: 72rem; margin: 0 auto; }
+.stats-loading { color: rgba(255, 245, 221, 0.6); max-width: 72rem; margin: 0 auto; }
+
+.model-stats-grid {
+  max-width: 72rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr));
+  gap: 1.1rem;
+}
+
+.model-stats-card {
+  background: rgba(255, 245, 221, 0.04);
+  border: 1px solid rgba(255, 245, 221, 0.12);
+  border-radius: 0.9rem;
+  padding: 1.1rem 1.2rem 1.3rem;
+}
+
+.model-stats-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+}
+
+.model-stats-header h2 {
+  font-family: "Fraunces", serif;
+  font-size: 1.25rem;
+  margin: 0;
+  color: #fff3d5;
+}
+
+.model-stats-backend {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 245, 221, 0.5);
+}
+
+.streak-chip {
+  margin-left: auto;
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.streak-chip--win { color: #6ee7a0; }
+.streak-chip--loss { color: #ff8a7a; }
+.streak-chip--warning { color: #ffcf63; margin-left: 0.4rem; }
+
+.model-stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.6rem 0.4rem;
+  margin: 0.8rem 0;
+  padding: 0.7rem 0;
+  border-top: 1px dashed rgba(255, 245, 221, 0.14);
+  border-bottom: 1px dashed rgba(255, 245, 221, 0.14);
+}
+
+.model-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.model-stat b {
+  font-size: 1.05rem;
+  color: #fff3d5;
+}
+
+.model-stat span {
+  font-size: 0.667rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: rgba(255, 245, 221, 0.5);
+}
+
+.run-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+  margin: 0.7rem 0;
+}
+
+.run-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.run-dot--win { background: #6ee7a0; box-shadow: 0 0 5px rgba(110, 231, 160, 0.6); }
+.run-dot--loss { background: rgba(255, 138, 122, 0.55); }
+
+.model-choice-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.6rem;
+}
+
+.model-choice-columns h3 {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 245, 221, 0.55);
+  margin: 0 0 0.4rem;
+}
+
+.choice-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+}
+
+.choice-bar-row {
+  display: grid;
+  grid-template-columns: 5.2rem 1fr auto;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+}
+
+.choice-bar-label { text-transform: capitalize; color: rgba(255, 245, 221, 0.75); }
+
+.choice-bar-track {
+  height: 0.4rem;
+  background: rgba(255, 245, 221, 0.1);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.choice-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff5a4f, #ffcf63);
+}
+
+.choice-bar-value { color: rgba(255, 245, 221, 0.55); white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .model-stats-row { grid-template-columns: repeat(2, 1fr); }
+  .model-choice-columns { grid-template-columns: 1fr; }
 }
 
 @keyframes dance-sparkle {

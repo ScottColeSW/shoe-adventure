@@ -91,6 +91,7 @@ function seedRow(
     model: SEED_MODEL,
     choice,
     fallback: false,
+    disagreesWithMemory: false,
     outcome: "unknown",
     latencyMs: 300 + Math.random() * 500,
     contextKey,

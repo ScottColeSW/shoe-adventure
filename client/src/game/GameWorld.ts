@@ -41,7 +41,37 @@ type PickupKind =
   | "heartPlus"
   | "extraLife";
 type ShoeForm = "starter" | "coralChrome" | "moonstep" | "pump" | "hightop" | "loafer" | "cowboy" | "sneaker";
+/** "There should only be 1 button for Special Move which uses the next item in their
+ * storage" -- Gum Stomp and Lace Lash used to be separate, permanently-unlocked abilities
+ * on their own keys (Q/E). Now they're one-time-use inventory items sharing a single
+ * trigger (see PlayerState.specialMoveQueue, tryUseSpecialMove). Ultra Move and the form
+ * attack stay as they were -- distinct, rarer abilities the user didn't ask to fold in. */
+type SpecialMoveKind = "gumStomp" | "laceLash";
 type EnemyKind = "lace" | "slime" | "skate" | "moth" | "gumTurret";
+/** Real names for flavor text (see e.g. tryLaceLash/tryGumStomp's this.message lines) --
+ * was generic "shoe fiends" for every kind, which read as a placeholder rather than the
+ * actual enemies list this game already has (Lace Goblins, Gum Slimes, Dust Moths, Gum
+ * Turrets, Rogue Skates for skate-kind minis/the true boss). */
+const ENEMY_KIND_LABEL: Record<EnemyKind, string> = {
+  lace: "Lace Goblins",
+  slime: "Gum Slimes",
+  skate: "Rogue Skates",
+  moth: "Dust Moths",
+  gumTurret: "Gum Turrets",
+};
+
+/** Builds a natural-language list of which enemy kinds got hit ("Lace Goblins" /
+ * "Lace Goblins and Gum Slimes" / "Lace Goblins, Gum Slimes, and a Rogue Skate") instead of
+ * the old one-size-fits-all "the shoe fiends". Falls back to the generic phrase only when
+ * targets is somehow empty (callers already branch on that separately, but stay defensive). */
+function describeEnemyTargets(targets: Enemy[]): string {
+  const kinds = Array.from(new Set(targets.map((enemy) => enemy.kind)));
+  const labels = kinds.map((kind) => ENEMY_KIND_LABEL[kind]);
+  if (labels.length === 0) return "the shoe fiends";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+}
 /** Mirrors server/agent/types.ts's ENEMY_RESPONSE_OPTIONS -- kept as a
  * local literal type rather than a cross-boundary import so the client
  * bundle never depends on server-only code. */
@@ -58,8 +88,7 @@ type GameCommand =
   | "pause"
   | "jump"
   | "dash"
-  | "lash"
-  | "stomp"
+  | "specialMove"
   | "formAttack"
   | "ultra"
   | "holdLeft"
@@ -115,10 +144,14 @@ interface PlayerState {
   superJump: boolean;
   superJumpTimer: number;
   shoeForm: ShoeForm;
-  laceLash: boolean;
-  gumStomp: boolean;
-  lashCooldown: number;
-  stompCooldown: number;
+  /** Consumable Special Move inventory, oldest first -- see SpecialMoveKind's own comment.
+   * A human's single Special Move key always uses index 0 (the oldest item); the agent's
+   * enemyResponse choice names a specific kind and consumes the first match instead (see
+   * tryUseSpecialMove). */
+  specialMoveQueue: SpecialMoveKind[];
+  /** One shared cooldown for Special Move regardless of which kind gets used -- matches
+   * "1 button", not two independent cooldowns hiding behind it. */
+  specialMoveCooldown: number;
   lashTimer: number;
   stompTimer: number;
   formAttackTimer: number;
@@ -163,6 +196,19 @@ interface Enemy {
    * player -- see throwProjectile()/updateEnemies. Undefined for every other kind, which
    * never throws. */
   throwCooldown?: number;
+  /** The "dark aura" every enemy gets, regardless of kind -- see attachDarkAura. Lazily
+   * attached the first time an enemy is processed in updateEnemies rather than at each of
+   * the half-dozen separate createXxx() call sites, so every enemy kind (including the
+   * legacy ?superrun world's own enemy list) gets one from a single place. */
+  auraMesh?: Mesh;
+  /** Mini-boss and true-boss only (see createMiniBoss/createTrueBoss) -- undefined for
+   * every regular enemy, which still dies in one hit exactly as before. Real combat hits
+   * (see damageEnemy) route through this instead of defeatEnemy directly, so a boss
+   * actually requires the back-and-forth "dance around it, land a hit, retreat" the user
+   * asked for rather than dropping the instant a stomp/attack connects. */
+  maxHits?: number;
+  /** Counts down from maxHits -- undefined until the first hit lands. */
+  hitsRemaining?: number;
 }
 
 interface Projectile {
@@ -178,6 +224,9 @@ interface Projectile {
 interface Pickup {
   kind: PickupKind;
   root: TransformNode;
+  /** The small sparkle-cross accent every pickup gets -- see createPickup's own comment.
+   * Spins and pulses independently of the icon it sits on, animated in updatePickups. */
+  glint: TransformNode;
   x: number;
   y: number;
   radius: number;
@@ -251,8 +300,9 @@ export interface UiSnapshot {
   agentBackend?: string;
   agentModel?: string;
   shoeForm: ShoeForm;
-  laceLash: boolean;
-  gumStomp: boolean;
+  /** Ordered, oldest first -- see PlayerState.specialMoveQueue's own comment. */
+  specialMoveQueue: SpecialMoveKind[];
+  specialMoveReady: boolean;
   superJump: boolean;
   shoeFormAttack: string;
   formAttackReady: boolean;
@@ -276,6 +326,11 @@ export interface UiSnapshot {
 }
 
 const WORLD_END = 66;
+/** How far above its look-at point the camera sits (world units) -- see updateCamera's own
+ * comment for the resulting tilt angle. Kept as one named constant rather than a magic
+ * number duplicated in both GameWorld.ts's per-frame updateCamera and scene.ts's
+ * one-time initial camera setup (the title screen, which never calls updateCamera). */
+const CAMERA_TILT_HEIGHT = 2.1;
 const PLAYER_WIDTH = 1.12;
 const PLAYER_HEIGHT = 1.48;
 /** Discrete-screens rebuild: each of the 6 levels is now its own standalone screen,
@@ -310,7 +365,10 @@ const LEVEL_MARKERS: { x: number; label: string }[] = [
 ];
 // 1 starting level + 5 markers = 6 levels total (each marker's label names the level
 // the player is entering, not the marker itself).
-const LEVEL_LABELS = ["BUTTON TRAIL", ...LEVEL_MARKERS.map((m) => m.label)];
+// Exported for GameCanvas.tsx's route-line HUD (the six-screen replacement for the old
+// single-world .stage-storyline strip, which hardcoded 4 fixed contraption names and can't
+// generalize to a variable screen count) -- see the route-line-strip section of GameCanvas.tsx.
+export const LEVEL_LABELS = ["BUTTON TRAIL", ...LEVEL_MARKERS.map((m) => m.label)];
 const LEVEL_COUNT = LEVEL_LABELS.length;
 
 /** One entry per discrete screen (see buildScreenContent) -- reuses LEVEL_LABELS so the
@@ -462,6 +520,14 @@ export class GameWorld {
    * checkAgentStall) rather than leaving a free-choosing agent stuck at a gated lane. */
   private agentStallTimer = 0;
   private agentStallX = 0;
+  /** Same idea as agentStallTimer/agentStallX, much blunter -- the scripted demo has no
+   * decision loop to retry from, so a stall here (see checkSuperRunStall) just forces its
+   * way past whatever's blocking rather than nudging and re-evaluating. Exists because a
+   * few real ones turned up this session (a Gum Turret with no charge left in storage, an
+   * unresolved edge case likely still lurking somewhere else) and each one meant an
+   * indefinite freeze with no self-recovery -- this is the backstop so a future one doesn't. */
+  private superRunStallTimer = 0;
+  private superRunStallX = 0;
   /** Consecutive stall triggers at (roughly) the same spot -- resets the moment real
    * progress happens. One stall gets the existing nudge (nearby aggro); a second stall
    * without ever having moved on escalates to spawnMonsterNest() instead of nudging
@@ -490,6 +556,9 @@ export class GameWorld {
   private player: PlayerState;
   private mode: GameMode = "title";
   private buttons = 0;
+  /** Total enemies defeated this run -- see defeatEnemy(). Only exists for the checkpoint
+   * status recap (see updateCheckpoints); nothing else currently reads it. */
+  private enemiesDefeated = 0;
   private message = "Lace up. The rescue starts now.";
   private activeCheckpoint = "Bedroom Threshold";
   /** The x updateCheckpoints() keeps in sync with activeCheckpoint -- where damagePlayer()
@@ -743,6 +812,7 @@ export class GameWorld {
     // units/s horizontal speed gives a full jump arc ~4.9 units long), so "random" never
     // means "occasionally impossible."
     const platformXs: number[] = [];
+    const platformYs: number[] = [];
     let py = -3.5;
     let px = 6.5;
     let flatRun = 0;
@@ -755,9 +825,14 @@ export class GameWorld {
         flatRun += 1;
       } else {
         flatRun = 0;
-        climb = (roll < 0.6 ? 1 : -1) * (0.5 + Math.random() * 0.75);
+        // Widened from 0.5-1.25 to 0.6-1.5, and the ceiling below raised from 3.4 to 4.6 --
+        // "a lot of platforms on the ground or close to the ground with not a lot of
+        // variety... this is an exploration game before a battle game" (the user, citing
+        // Mario/Sonic/Dora). More headroom for a genuinely taller main path, on top of the
+        // dedicated upper-path branch below.
+        climb = (roll < 0.6 ? 1 : -1) * (0.6 + Math.random() * 0.9);
       }
-      py = Math.max(-4.0, Math.min(3.4, py + climb));
+      py = Math.max(-4.0, Math.min(4.6, py + climb));
       // A real shortcut on a big upward step -- matches the original hand-built world's
       // own "bounce pad = faster route up" intent -- rather than every kind purely
       // cycling in a fixed rotation regardless of what the step actually calls for.
@@ -765,8 +840,34 @@ export class GameWorld {
       const width = 3.0 + Math.random() * 1.4;
       this.createPlatform(px, py, width, 0.8, kind);
       platformXs.push(px);
+      platformYs.push(py);
       px += 4.4 + Math.random() * 0.9; // 4.4-5.3, varied but always within jump range
       i += 1;
+    }
+
+    // Upper-path branch: a genuine "climb up here for something" detour, entirely
+    // optional -- there's no time limit, so a taller side route earns its keep by being
+    // worth finding, not by being mandatory. Steps off an existing mid-screen platform,
+    // climbs 2-3 more platforms above the main path to a real peak, holds a bonus pickup
+    // there, and simply ends -- no forced landing platform back down, the same "drop back
+    // into the open air below" shape Mario's classic bonus-alcove climbs use. One branch
+    // per screen; roughly a third of the way through so it reads as a real fork, not a
+    // tacked-on extra step at the very end.
+    if (platformXs.length >= 5) {
+      const branchStart = Math.floor(platformXs.length * (0.3 + Math.random() * 0.25));
+      let bx = platformXs[branchStart];
+      let by = platformYs[branchStart];
+      const branchSteps = 2 + Math.floor(Math.random() * 2); // 2-3
+      for (let step = 0; step < branchSteps; step += 1) {
+        bx += 2.6 + Math.random() * 0.8;
+        // Capped at 1.0-1.5 rise per step, safely under tryJump's ~1.58-unit real ceiling
+        // (see the main loop's own comment on that number) -- a branch step being
+        // unreachable would be a much worse failure than a slightly gentler climb.
+        by = Math.min(6.8, by + 1.0 + Math.random() * 0.5);
+        const isPeak = step === branchSteps - 1;
+        this.createPlatform(bx, by, isPeak ? 2.4 : 2.0, 0.7, theme.platformKinds[0]);
+        if (isPeak) this.pickups.push(this.createPickup("bonus", bx, by + 1.1));
+      }
     }
 
     // Enemies: cycle through the theme's enemy pool at roughly one every ~5 units,
@@ -917,15 +1018,19 @@ export class GameWorld {
   }
 
   private configureLights() {
+    // Both bumped again, and groundColor (light on faces turned away from the key light)
+    // raised from a near-black 0.13/0.065/0.11 -- that alone made every shadowed surface
+    // read as muddy night rather than a lit evening scene. See scene.ts's clearColor and
+    // index.css's background tokens for the rest of the same lightening pass.
     const sky = new HemisphericLight("twilightSky", new Vector3(0, 1, -0.2), this.scene);
-    sky.intensity = 1.08;
-    sky.diffuse = new Color3(0.44, 0.6, 0.9);
-    sky.groundColor = new Color3(0.13, 0.065, 0.11);
+    sky.intensity = 1.32;
+    sky.diffuse = new Color3(0.52, 0.68, 0.96);
+    sky.groundColor = new Color3(0.3, 0.22, 0.32);
 
     const key = new DirectionalLight("warmKey", new Vector3(-0.35, -1, -0.55), this.scene);
     key.position = new Vector3(22, 11, -13);
-    key.intensity = 1.55;
-    key.diffuse = new Color3(1, 0.73, 0.48);
+    key.intensity = 1.85;
+    key.diffuse = new Color3(1, 0.76, 0.52);
 
     // rescueLamp/moonRim were tuned as fixed accent pools for one specific 66-unit world
     // where the player only ever passed x=58/x=20 once. Every discrete screen now spans
@@ -950,19 +1055,19 @@ export class GameWorld {
   private createBackdrop() {
     const moon = MeshBuilder.CreateDisc("windowMoon", { radius: 1.15, tessellation: 40 }, this.scene);
     moon.position = new Vector3(-4.2, 5.3, 5.2);
-    moon.material = this.createMaterial("windowMoonMat", new Color3(0.65, 0.88, 1), new Color3(0.19, 0.38, 0.72));
+    moon.material = this.createMaterial("windowMoonMat", new Color3(0.65, 0.88, 1), new Color3(0.19, 0.38, 0.72), true, true);
     this.parallax.push(moon);
 
     for (let index = 0; index < 10; index += 1) {
       const star = MeshBuilder.CreateDisc(`paperStar${index}`, { radius: 0.05 + (index % 3) * 0.025, tessellation: 12 }, this.scene);
       star.position = new Vector3(-8 + index * 5.6, 3 + ((index * 7) % 4), 6.2);
-      star.material = this.createMaterial(`paperStarMat${index}`, CREAM, GOLD);
+      star.material = this.createMaterial(`paperStarMat${index}`, CREAM, GOLD, true, true);
       this.parallax.push(star);
     }
 
     const rug = MeshBuilder.CreateBox("softRug", { width: 80, height: 0.12, depth: 3.6 }, this.scene);
     rug.position = new Vector3(31, -5.14, 1.7);
-    rug.material = this.createMaterial("rugMat", new Color3(0.11, 0.28, 0.3), new Color3(0.02, 0.06, 0.08));
+    rug.material = this.createMaterial("rugMat", new Color3(0.11, 0.28, 0.3), new Color3(0.02, 0.06, 0.08), true, true);
     rug.isPickable = false;
   }
 
@@ -1277,10 +1382,8 @@ export class GameWorld {
       superJump: false,
       superJumpTimer: 0,
       shoeForm: "starter",
-      laceLash: false,
-      gumStomp: false,
-      lashCooldown: 0,
-      stompCooldown: 0,
+      specialMoveQueue: [],
+      specialMoveCooldown: 0,
       lashTimer: 0,
       stompTimer: 0,
       formAttackTimer: 0,
@@ -1470,6 +1573,7 @@ export class GameWorld {
     const boss = this.createRollerSkate(x, bottom, minX, maxX);
     boss.bossTier = "mini";
     boss.bossName = bossName;
+    boss.maxHits = 2;
     boss.width = 1.38;
     boss.height = 1.34;
     boss.speed *= 0.76;
@@ -1486,6 +1590,7 @@ export class GameWorld {
     const boss = this.createRollerSkate(x, bottom, minX, maxX);
     boss.bossTier = "boss";
     boss.bossName = "The Tangled Titan";
+    boss.maxHits = 3;
     boss.width = 2.18;
     boss.height = 2.08;
     boss.speed *= 0.44;
@@ -1657,8 +1762,29 @@ export class GameWorld {
     }
     icon.parent = root;
     icon.position.z = -0.25;
+
+    // "Shine like a star" -- every pickup, regardless of kind, gets the same small bright
+    // sparkle accent so the category reads at a glance (pickup vs. enemy vs. background)
+    // even before a player identifies the specific icon. Deliberately built with a fresh,
+    // fully-emissive material rather than createMaterial's shared cache (whose colors are
+    // all dimmed to 0.14x for ordinary lit objects, see its own comment) -- a glint that
+    // isn't visibly brighter than the object it's sitting on isn't a glint.
+    const glintPivot = new TransformNode(`pickupGlintPivot-${x}-${y}`, this.scene);
+    glintPivot.parent = root;
+    glintPivot.position = new Vector3(0.2, 0.2, -0.36);
+    const glintMat = new StandardMaterial(`pickupGlintMat-${x}-${y}`, this.scene);
+    glintMat.diffuseColor = CREAM;
+    glintMat.emissiveColor = CREAM;
+    glintMat.specularColor = new Color3(0, 0, 0);
+    const glintA = MeshBuilder.CreateBox(`pickupGlintA-${x}-${y}`, { width: 0.3, height: 0.045, depth: 0.02 }, this.scene);
+    glintA.parent = glintPivot;
+    glintA.material = glintMat;
+    const glintB = MeshBuilder.CreateBox(`pickupGlintB-${x}-${y}`, { width: 0.045, height: 0.3, depth: 0.02 }, this.scene);
+    glintB.parent = glintPivot;
+    glintB.material = glintMat;
+
     root.position = new Vector3(x, y, -0.22);
-    return { kind, root, x, y, radius: kind === "button" ? 0.32 : 0.5, collected: false, phase: x * 0.7 };
+    return { kind, root, glint: glintPivot, x, y, radius: kind === "button" ? 0.32 : 0.5, collected: false, phase: x * 0.7 };
   }
 
   private createCheckpoints() {
@@ -1821,16 +1947,19 @@ export class GameWorld {
 
   private onKeyDown(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
-    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "q", "e", "f", "u", "shift", "r", "escape"].includes(key)) {
+    // Standardized to the A/W/D/S/X cluster (all one hand, no reaching) -- Special Move
+    // consolidates the old separate Q (Lace Lash) and E (Gum Stomp) keys into X, one
+    // button that uses whatever's next in storage (see tryUseSpecialMove). Dash moves onto
+    // S (Shift still works too, kept as a soft-compat alias rather than removed outright).
+    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "s", "x", "f", "u", "shift", "r", "escape"].includes(key)) {
       event.preventDefault();
     }
     if (this.superRun && key !== "escape") return;
     if (key === "arrowleft" || key === "a") this.held.left = true;
     if (key === "arrowright" || key === "d") this.held.right = true;
     if (key === "arrowup" || key === "w" || key === " ") this.tryJump();
-    if (key === "shift") this.tryDash();
-    if (key === "q") this.tryLaceLash();
-    if (key === "e") this.tryGumStomp();
+    if (key === "shift" || key === "s") this.tryDash();
+    if (key === "x") this.tryUseSpecialMove();
     if (key === "f") this.tryShoeFormAttack();
     if (key === "u") this.tryUltraMove();
     if (key === "r") this.restart();
@@ -1851,8 +1980,7 @@ export class GameWorld {
     if (command === "pause") this.togglePause();
     if (command === "jump") this.tryJump();
     if (command === "dash") this.tryDash();
-    if (command === "lash") this.tryLaceLash();
-    if (command === "stomp") this.tryGumStomp();
+    if (command === "specialMove") this.tryUseSpecialMove();
     if (command === "formAttack") this.tryShoeFormAttack();
     if (command === "ultra") this.tryUltraMove();
     if (command === "holdLeft") this.held.left = true;
@@ -1945,6 +2073,7 @@ export class GameWorld {
     this.activeCheckpoint = "Bedroom Threshold";
     this.activeCheckpointX = 0;
     this.buttons = 0;
+    this.enemiesDefeated = 0;
     this.player.x = 0;
     this.player.bottom = -4.2;
     this.player.vx = 0;
@@ -1958,10 +2087,8 @@ export class GameWorld {
     this.player.superJump = false;
     this.player.superJumpTimer = 0;
     this.player.shoeForm = "starter";
-    this.player.laceLash = false;
-    this.player.gumStomp = false;
-    this.player.lashCooldown = 0;
-    this.player.stompCooldown = 0;
+    this.player.specialMoveQueue = [];
+    this.player.specialMoveCooldown = 0;
     this.player.lashTimer = 0;
     this.player.stompTimer = 0;
     this.player.formAttackTimer = 0;
@@ -2393,9 +2520,27 @@ export class GameWorld {
     this.spawnSparks(x, y + 0.42, GOLD, 20, 4.4);
   }
 
+  private hasSpecialMove(kind: SpecialMoveKind): boolean {
+    return this.player.specialMoveQueue.includes(kind) && this.player.specialMoveCooldown <= 0;
+  }
+
+  /** The single Special Move key/action -- pops the given kind (agent, an active named
+   * choice) or the oldest queued item (human, "just use my next special move") out of
+   * inventory and executes it. Both tryLaceLash/tryGumStomp below are pure execution now --
+   * no unlock check, no cooldown of their own -- this is the only gate. */
+  private tryUseSpecialMove(kind?: SpecialMoveKind) {
+    if (this.mode !== "playing" || this.player.specialMoveCooldown > 0) return;
+    const index = kind ? this.player.specialMoveQueue.indexOf(kind) : 0;
+    if (index === -1 || this.player.specialMoveQueue.length === 0) return;
+    const used = this.player.specialMoveQueue[index];
+    this.player.specialMoveQueue.splice(index, 1);
+    this.player.specialMoveCooldown = 0.9;
+    if (used === "gumStomp") this.tryGumStomp();
+    else this.tryLaceLash();
+    this.publishUi(true);
+  }
+
   private tryLaceLash() {
-    if (this.mode !== "playing" || !this.player.laceLash || this.player.lashCooldown > 0) return;
-    this.player.lashCooldown = 0.72;
     this.player.lashTimer = this.superRun ? 0.58 : 0.34;
     this.player.invulnerable = Math.max(this.player.invulnerable, 0.32);
     const targets = this.enemies.filter((enemy) =>
@@ -2404,14 +2549,12 @@ export class GameWorld {
     this.triggerCinematicBeat(0.18, 0.08);
     this.spawnSparks(this.player.x + this.player.facing * 1.15, this.player.bottom + 0.72, CREAM, 16, 3.8);
     this.spawnImpactRing(this.player.x + this.player.facing * 1.05, this.player.bottom + 0.72, CREAM, 0.72);
-    targets.forEach((enemy) => this.defeatEnemy(enemy));
-    this.message = targets.length > 0 ? "Lace Lash snaps the shoe fiends off the route." : "Lace Lash cracks across the stitched air.";
+    targets.forEach((enemy) => this.damageEnemy(enemy));
+    this.message = targets.length > 0 ? `Lace Lash snaps ${describeEnemyTargets(targets)} off the route.` : "Lace Lash cracks across the stitched air.";
     this.publishUi(true);
   }
 
   private tryGumStomp() {
-    if (this.mode !== "playing" || !this.player.gumStomp || this.player.stompCooldown > 0) return;
-    this.player.stompCooldown = 1.25;
     this.player.stompTimer = this.superRun ? 0.66 : 0.42;
     this.player.invulnerable = Math.max(this.player.invulnerable, 0.48);
     if (this.player.grounded) this.player.vy = 4.2;
@@ -2419,8 +2562,8 @@ export class GameWorld {
     this.triggerCinematicBeat(0.2, 0.09);
     this.spawnSparks(this.player.x, this.player.bottom + 0.34, MOSS, 22, 4.1);
     this.spawnImpactRing(this.player.x, this.player.bottom + 0.28, MOSS, 0.96);
-    targets.forEach((enemy) => this.defeatEnemy(enemy));
-    this.message = targets.length > 0 ? "Gum Stomp sticks the shoe fiends in place — then bounces clear!" : "Gum Stomp lands with a bright sticky bounce.";
+    targets.forEach((enemy) => this.damageEnemy(enemy));
+    this.message = targets.length > 0 ? `Gum Stomp sticks ${describeEnemyTargets(targets)} in place — then bounces clear!` : "Gum Stomp lands with a bright sticky bounce.";
     this.publishUi(true);
   }
 
@@ -2603,9 +2746,36 @@ export class GameWorld {
     if (this.player.dashCharges > 0 && this.player.x > 21 && this.player.dashCooldown <= 0) this.tryDash();
   }
 
+  /** The scripted demo's own stall watchdog -- see superRunStallTimer's own comment on why
+   * this exists. Unlike checkAgentStall (nudge, then escalate, giving a free-choosing agent
+   * room to actually solve it itself) this is a blunt instrument on purpose: the scripted
+   * path has no decision loop to give room to, so a stall just means something is
+   * unconditionally broken and needs to be forced past, not negotiated with. Clears the
+   * pause gate directly, removes anything within reach outright, and shoves the player
+   * forward -- a real fix for the specific cause found this session is better than this,
+   * but this backstop means a *future* one degrades to "a brief visible stutter" instead of
+   * "the demo is stuck forever with no self-recovery." */
+  private checkSuperRunStall(delta: number) {
+    if (Math.abs(this.player.x - this.superRunStallX) > 0.6) {
+      this.superRunStallX = this.player.x;
+      this.superRunStallTimer = 0;
+      return;
+    }
+    this.superRunStallTimer += delta;
+    if (this.superRunStallTimer < 6) return;
+    this.superRunStallTimer = 0;
+    this.superRunStallX = this.player.x;
+    this.superRunPauseTimer = 0;
+    this.enemies.filter((enemy) => enemy.alive && Math.abs(enemy.x - this.player.x) < 3).forEach((enemy) => this.defeatEnemy(enemy));
+    this.player.vx = 9;
+    this.player.x += 1.5;
+    this.logAgent(`⚠ AI SUPER RUN stalled 6s at x=${this.player.x.toFixed(1)} — forced past it`);
+  }
+
   private updateSuperRun(delta: number) {
     this.superRunKickTimer = Math.max(0, this.superRunKickTimer - delta);
     this.superRunPauseTimer = Math.max(0, this.superRunPauseTimer - delta);
+    this.checkSuperRunStall(delta);
     this.held.left = false;
     this.held.right = this.player.x < 63.2 && this.superRunPauseTimer <= 0;
     if (this.superRunPauseTimer > 0 && this.player.dashTimer <= 0 && this.player.formAttackTimer <= 0 && this.player.ultraTimer <= 0) {
@@ -2658,8 +2828,8 @@ export class GameWorld {
     if (x >= 39.72 && this.markSuperRunMilestone("cowboy", "COWBOY BOOT FORM — Spur Kick reaches across the bridge sentries.")) this.claimSuperRunPowerup("cowboy", "COWBOY BOOT FORM — Spur Kick clears the bridge sentries.");
     if (x >= 41.72 && this.markSuperRunMilestone("lace-lash", "LACE LASH — the AI snaps the Lace Lever and topples its stitch dominoes.")) {
       this.claimSuperRunPowerup("lash", "LACE LASH — thread-whip armed.");
-      this.player.lashCooldown = 0;
-      this.tryLaceLash();
+      this.player.specialMoveCooldown = 0;
+      this.tryUseSpecialMove("laceLash");
       this.activateSuperRunContraption("laceLever", "LACE LEVER — AI lash topples the dominoes and stitches the bridge tight.");
     }
     if (x >= 43.7 && this.markSuperRunMilestone("stage-2-complete", "STAGE 2 CLEAR — the bridge guard and every laundry-lane foe are resolved.")) {
@@ -2680,13 +2850,24 @@ export class GameWorld {
     if (x >= 53.35 && this.markSuperRunMilestone("tower-heart", "HEALTH POWER-UP — the AI takes the Heart Sole before committing to the mini-boss.")) this.claimSuperRunPowerup("heart", "HEALTH POWER-UP — Heart Sole restores the Tower Break safety margin.");
     if (x >= 54.72 && this.markSuperRunMilestone("gum-stomp", "GUM STOMP — the AI arms the sticky impact that powers the tower ramp.")) {
       this.claimSuperRunPowerup("gum", "GUM STOMP — sticky sole impact armed.");
-      this.player.stompCooldown = 0;
-      this.tryGumStomp();
+      this.player.specialMoveCooldown = 0;
+      this.tryUseSpecialMove("gumStomp");
       this.activateSuperRunContraption("gumPress", "GUM PRESS — AI Gum Stomp compresses the ramp for the tower approach.");
     }
     if (x >= 55.95 && this.markSuperRunMilestone("tower-mini-boss", "MINI-BOSS — Gum Marshal enters; the AI performs a measured Gum Stomp break.")) {
-      this.player.stompCooldown = 0;
-      this.tryGumStomp();
+      // Guarantee a real inventory item to consume here regardless of whether the
+      // gum-stomp milestone above already spent the one from claimSuperRunPowerup.
+      this.player.specialMoveQueue.push("gumStomp");
+      this.player.specialMoveCooldown = 0;
+      this.tryUseSpecialMove("gumStomp");
+      // tryGumStomp above now only staggers a multi-hit mini-boss (see damageEnemy) instead
+      // of always finishing it in one hit -- this scripted beat is a guaranteed one-shot
+      // trigger with no retry, and the narrow 54.8-57.9 position window below wasn't wide
+      // enough to reliably still catch a patrolling Gum Marshal on the sweep either, so
+      // live-tested this stalled the whole demo with the boss alive and staggered forever.
+      // Look the mini-boss up directly by identity and finish it, not by position.
+      const gumMarshal = this.enemies.find((enemy) => enemy.alive && enemy.bossTier === "mini");
+      if (gumMarshal) this.defeatEnemy(gumMarshal);
       this.clearSuperRunEnemies(54.8, 57.9, "GUM MARSHAL MINI-BOSS BREAK");
     }
     if (x >= 57.2 && this.markSuperRunMilestone("spool-lift", "SPOOL LIFT — the AI winds the final rescue latch while the tower lane clears.")) this.activateSuperRunContraption("spoolLift", "SPOOL LIFT — thread winch raises the final rescue latch.");
@@ -2720,17 +2901,31 @@ export class GameWorld {
         this.tryUltraMove();
       } else if (target.bossTier === "boss") {
         this.setAgentActivity("targeting", "BOSS GATE");
-      } else if (target.bossTier === "mini" && target.bossName === "Gum Marshal" && this.player.gumStomp && this.player.stompCooldown <= 0) {
-        this.tryGumStomp();
+      } else if (target.bossTier === "mini" && target.bossName === "Gum Marshal") {
+        // Guaranteed, same reasoning as the tower-mini-boss milestone fix: this scripted
+        // beat has no retry loop, so it can't be left waiting on whatever's left in
+        // storage by the time it gets here.
+        if (!this.hasSpecialMove("gumStomp")) this.player.specialMoveQueue.push("gumStomp");
+        this.tryUseSpecialMove("gumStomp");
         this.setAgentActivity("attacking", "GUM MARSHAL");
-      } else if (target.bossTier === "mini" && this.player.laceLash && this.player.lashCooldown <= 0) {
-        this.tryLaceLash();
+      } else if (target.bossTier === "mini" && this.hasSpecialMove("laceLash")) {
+        this.tryUseSpecialMove("laceLash");
         this.setAgentActivity("attacking", "LACE CAPTAIN");
-      } else if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) {
-        this.tryGumStomp();
+      } else if (target.gumArmored) {
+        // Only Gum Stomp can touch a Gum Turret (see tryGumStomp/updateEnemies) -- the
+        // single "gum" pickup in this legacy world (x=55.0) already gets spent by the
+        // gum-stomp milestone's own flourish at x=54.72, leaving nothing for this turret at
+        // x=57.9 under the new consumable-inventory model (used to be a permanent unlock,
+        // so this never ran dry before). Same guaranteed-charge fix as Gum Marshal above --
+        // live-tested, without it the scripted demo stalled here indefinitely.
+        if (!this.hasSpecialMove("gumStomp")) this.player.specialMoveQueue.push("gumStomp");
+        this.tryUseSpecialMove("gumStomp");
         this.setAgentActivity("attacking", "GUM STOMP");
-      } else if (this.player.laceLash && this.player.lashCooldown <= 0) {
-        this.tryLaceLash();
+      } else if (this.hasSpecialMove("gumStomp") && this.player.x > 54) {
+        this.tryUseSpecialMove("gumStomp");
+        this.setAgentActivity("attacking", "GUM STOMP");
+      } else if (this.hasSpecialMove("laceLash")) {
+        this.tryUseSpecialMove("laceLash");
         this.setAgentActivity("attacking", "LACE LASH");
       } else {
         this.setAgentActivity("attacking", "SUPER KICK");
@@ -3018,7 +3213,7 @@ export class GameWorld {
       signal: this.agentGoalAbortController.signal,
     })
       .then((res) => (res.ok ? res.json() : null))
-      .then((response: { choice?: AgentGoal | null; decisionId?: number; prompt?: string; raw?: string | null } | null) => {
+      .then((response: { choice?: AgentGoal | null; decisionId?: number; disagreesWithMemory?: boolean; prompt?: string; raw?: string | null } | null) => {
         if (this.disposed) return;
         // The outgoing goal reached the end of its window without damagePlayer ever
         // reporting against it, i.e. it went fine -- close it out as a positive outcome
@@ -3027,7 +3222,11 @@ export class GameWorld {
         this.agentGoal = response?.choice ?? "advance";
         this.agentGoalDecisionId = response?.decisionId ?? null;
         this.setAgentActivity(this.activityForGoal(this.agentGoal), this.labelForGoal(this.agentGoal));
-        this.logAgent(response?.choice ? `✓ goal: ${response.choice}` : "⚠ goal fallback: advance (no usable reply in time)");
+        this.logAgent(
+          response?.choice
+            ? `✓ goal: ${response.choice}${response.disagreesWithMemory ? " (note: goes against well-established data here)" : ""}`
+            : "⚠ goal fallback: advance (no usable reply in time)",
+        );
         // The real prompt sent and the model's unedited reply -- open devtools to see
         // for yourself that this is a live exchange, not the game picking its own outcome.
         if (response?.prompt) console.log(`[Shoe Adventure agent] ${this.agentBackend}/${this.agentModel} asked:\n${response.prompt}\n→ raw reply: ${JSON.stringify(response.raw)}`);
@@ -3162,10 +3361,10 @@ export class GameWorld {
    * (b) the safety mapper when the agent picks a legal option that isn't
    * actually usable right now (e.g. "gum_stomp" with no charge ready). */
   private scriptedEnemyChoice(enemy: Enemy): AgentEnemyChoice {
-    if (enemy.bossTier === "mini" && enemy.bossName === "Gum Marshal" && this.player.gumStomp && this.player.stompCooldown <= 0) return "gum_stomp";
-    if (enemy.bossTier === "mini" && this.player.laceLash && this.player.lashCooldown <= 0) return "lace_lash";
-    if (this.player.gumStomp && this.player.x > 54 && this.player.stompCooldown <= 0) return "gum_stomp";
-    if (this.player.laceLash && this.player.lashCooldown <= 0) return "lace_lash";
+    if (enemy.bossTier === "mini" && enemy.bossName === "Gum Marshal" && this.hasSpecialMove("gumStomp")) return "gum_stomp";
+    if (enemy.bossTier === "mini" && this.hasSpecialMove("laceLash")) return "lace_lash";
+    if (this.hasSpecialMove("gumStomp") && this.player.x > 54) return "gum_stomp";
+    if (this.hasSpecialMove("laceLash")) return "lace_lash";
     return "super_kick";
   }
 
@@ -3196,11 +3395,11 @@ export class GameWorld {
         hearts: this.player.hearts,
         maxHearts: this.player.maxHearts,
         shoeForm: this.player.shoeForm,
-        gumStomp: this.player.gumStomp,
-        laceLash: this.player.laceLash,
+        gumStomp: this.player.specialMoveQueue.includes("gumStomp"),
+        laceLash: this.player.specialMoveQueue.includes("laceLash"),
         ultraMove: this.player.ultraMove,
-        gumStompReady: this.player.gumStomp && this.player.stompCooldown <= 0,
-        laceLashReady: this.player.laceLash && this.player.lashCooldown <= 0,
+        gumStompReady: this.hasSpecialMove("gumStomp"),
+        laceLashReady: this.hasSpecialMove("laceLash"),
         ultraMoveReady: this.player.ultraMove && this.player.ultraCooldown <= 0,
       },
       enemy: {
@@ -3225,13 +3424,17 @@ export class GameWorld {
       signal: this.agentEnemyAbortController.signal,
     })
       .then((res) => (res.ok ? res.json() : null))
-      .then((response: { choice?: AgentEnemyChoice | null; fallback?: boolean; decisionId?: number; latencyMs?: number; prompt?: string; raw?: string | null } | null) => {
+      .then((response: { choice?: AgentEnemyChoice | null; fallback?: boolean; disagreesWithMemory?: boolean; decisionId?: number; latencyMs?: number; prompt?: string; raw?: string | null } | null) => {
         if (this.disposed) return;
         const entry = this.agentAskedEnemies.get(enemy);
         if (entry) entry.decisionId = response?.decisionId ?? null;
+        // The model's own choice always executes as given now -- see decide.ts's own
+        // comment on why the old silent-override behavior got removed. A disagreement with
+        // memory is worth noting (a "second opinion" for whoever reviews the log later,
+        // not a correction), so it's logged here rather than changing what actually happens.
         this.logAgent(
           response?.choice
-            ? `✓ ${response.choice}${response.fallback ? " (memory fallback)" : ""} (${Math.round(response.latencyMs ?? 0)}ms)`
+            ? `✓ ${response.choice}${response.disagreesWithMemory ? " (note: goes against well-established data here)" : ""} (${Math.round(response.latencyMs ?? 0)}ms)`
             : "⚠ enemy fallback: no usable reply in time",
         );
         if (response?.prompt) console.log(`[Shoe Adventure agent] ${this.agentBackend}/${this.agentModel} asked:\n${response.prompt}\n→ raw reply: ${JSON.stringify(response.raw)}`);
@@ -3257,8 +3460,8 @@ export class GameWorld {
     this.setAgentActivity(fallback ? "fallback" : "attacking", fallback ? "FALLBACK" : String(choice).toUpperCase().replace(/_/g, " "));
 
     const resolved = choice ?? this.scriptedEnemyChoice(enemy);
-    if (resolved === "gum_stomp" && this.player.gumStomp && this.player.stompCooldown <= 0) this.tryGumStomp();
-    else if (resolved === "lace_lash" && this.player.laceLash && this.player.lashCooldown <= 0) this.tryLaceLash();
+    if (resolved === "gum_stomp" && this.hasSpecialMove("gumStomp")) this.tryUseSpecialMove("gumStomp");
+    else if (resolved === "lace_lash" && this.hasSpecialMove("laceLash")) this.tryUseSpecialMove("laceLash");
     else if (resolved === "avoid") {
       // Used to do nothing at all -- just trusted existing forward momentum to carry the
       // player clear, which only works when the enemy happens to be off to the side or
@@ -3464,10 +3667,14 @@ export class GameWorld {
     if (enemy.kind === "skate" && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
     this.superRunKickTimer = 0.72;
     if (this.superRun) this.superRunPauseTimer = Math.max(this.superRunPauseTimer, enemy.bossTier === "mini" ? 0.82 : 0.58);
-    this.defeatEnemy(enemy);
+    this.damageEnemy(enemy);
     this.player.vy = Math.max(this.player.vy, 7.4);
-    this.superRunAction = `${move} — ${enemy.kind === "skate" ? "rogue skate grounded." : "shoe fiend cleared."}`;
-    this.message = `AI SUPER RUN: ${this.superRunAction}`;
+    // damageEnemy already set its own stagger message/log when this hit didn't finish a
+    // multi-hit boss -- only overwrite it with the "cleared" callout once it's actually gone.
+    if (!enemy.alive) {
+      this.superRunAction = `${move} — ${enemy.kind === "skate" ? "rogue skate grounded." : "shoe fiend cleared."}`;
+      this.message = `AI SUPER RUN: ${this.superRunAction}`;
+    }
     this.triggerCinematicBeat(enemy.bossTier === "mini" ? 0.3 : 0.16, enemy.bossTier === "mini" ? 0.14 : 0.07);
     this.spawnSparks(enemy.x, enemy.bottom + 0.78, RESCUE_CORAL, 12, 3.8);
     this.spawnImpactRing(enemy.x, enemy.bottom + 0.78, RESCUE_CORAL, enemy.bossTier === "mini" ? 1.18 : 0.78);
@@ -3477,8 +3684,7 @@ export class GameWorld {
     this.player.invulnerable = Math.max(0, this.player.invulnerable - delta);
     this.player.dashTimer = Math.max(0, this.player.dashTimer - delta);
     this.player.dashCooldown = Math.max(0, this.player.dashCooldown - delta);
-    this.player.lashCooldown = Math.max(0, this.player.lashCooldown - delta);
-    this.player.stompCooldown = Math.max(0, this.player.stompCooldown - delta);
+    this.player.specialMoveCooldown = Math.max(0, this.player.specialMoveCooldown - delta);
     this.player.lashTimer = Math.max(0, this.player.lashTimer - delta);
     this.player.stompTimer = Math.max(0, this.player.stompTimer - delta);
     this.player.formAttackTimer = Math.max(0, this.player.formAttackTimer - delta);
@@ -3599,6 +3805,26 @@ export class GameWorld {
     }
   }
 
+  /** "Dark aura" -- every enemy, regardless of kind, gets a soft dark halo sitting just
+   * behind it, the enemy-side counterpart to createPickup's bright glint: pickups shine,
+   * enemies loom, background scenery goes flat and dull (see createMaterial's flat
+   * option). Lazily attached from updateEnemies the first time each enemy is processed
+   * rather than touched into every createXxx() call site, so this covers every enemy kind
+   * -- including the legacy ?superrun world's own enemy list -- from one place. */
+  private attachDarkAura(enemy: Enemy): Mesh {
+    const scale = enemy.bossTier === "boss" ? 1.95 : enemy.bossTier === "mini" ? 1.5 : 1.05;
+    const aura = MeshBuilder.CreateDisc(`enemyAura-${enemy.kind}-${enemy.x}`, { radius: 0.5 * scale, tessellation: 24 }, this.scene);
+    aura.parent = enemy.root;
+    aura.position = new Vector3(0, -0.04, 0.22);
+    const auraMat = new StandardMaterial(`enemyAuraMat-${enemy.kind}-${enemy.x}`, this.scene);
+    auraMat.diffuseColor = new Color3(0.04, 0.015, 0.07);
+    auraMat.emissiveColor = new Color3(0.16, 0.03, 0.24);
+    auraMat.specularColor = new Color3(0, 0, 0);
+    auraMat.alpha = 0.5;
+    aura.material = auraMat;
+    return aura;
+  }
+
   private updateEnemies(delta: number) {
     const slowFactor = this.player.moonTimer > 0 ? 0.36 : 1;
     const cinematicSlow = this.superRun && this.superRunPauseTimer > 0 ? 0.12 : 1;
@@ -3616,6 +3842,9 @@ export class GameWorld {
         }
         continue;
       }
+      enemy.auraMesh = enemy.auraMesh ?? this.attachDarkAura(enemy);
+      const auraPulse = 0.88 + 0.16 * Math.sin(this.titleTime * 2.3 + enemy.phase);
+      enemy.auraMesh.scaling.setAll(auraPulse);
       if (enemy.bossTier) {
         this.updateBossPattern(enemy, delta, slowFactor * cinematicSlow);
       } else if (enemy.kind === "moth") {
@@ -3665,7 +3894,7 @@ export class GameWorld {
           this.message = "Gum Turret shrugs off the stomp -- only Gum Stomp cracks its shell.";
           this.publishUi(true);
         } else {
-          this.defeatEnemy(enemy);
+          this.damageEnemy(enemy);
         }
       } else if (sideHit && this.player.dashTimer <= 0 && this.player.formShieldTimer <= 0 && this.player.ultraTimer <= 0) {
         if (this.isAgentRun) this.reportAgentOutcome(enemy, "player_damaged");
@@ -3854,10 +4083,30 @@ export class GameWorld {
       if (pickup.collected) continue;
       pickup.root.position.y = pickup.y + Math.sin(this.titleTime * 3 + pickup.phase) * 0.11;
       pickup.root.rotation.z += delta * 0.8;
+      pickup.glint.rotation.z += delta * 2.1;
+      const twinkle = 0.75 + 0.4 * Math.max(0, Math.sin(this.titleTime * 4.4 + pickup.phase * 1.7));
+      pickup.glint.scaling.setAll(twinkle);
       if (Math.abs(this.player.x - pickup.x) < pickup.radius + 0.48 && Math.abs(this.player.bottom + 0.7 - pickup.root.position.y) < pickup.radius + 0.7) {
         this.collectPickup(pickup);
       }
     }
+  }
+
+  /** Hearts/lives/score/kills/abilities-in-stock, in one line -- read out at every
+   * checkpoint (see updateCheckpoints) so a status check doesn't require pausing to hunt
+   * across the whole HUD, and so an agent run's decision log carries a periodic full
+   * situational recap alongside its usual per-decision entries. */
+  private buildCheckpointRecap(): string {
+    const abilities: string[] = [];
+    if (this.player.dashCharges > 0) abilities.push(`${this.player.dashCharges} dash${this.player.dashCharges === 1 ? "" : "es"}`);
+    if (this.player.doubleJumps > 0) abilities.push(`${this.player.doubleJumps} wingtip jump${this.player.doubleJumps === 1 ? "" : "s"}`);
+    if (this.player.ultraMove) abilities.push("Ultra Move");
+    const gumStompCount = this.player.specialMoveQueue.filter((kind) => kind === "gumStomp").length;
+    const laceLashCount = this.player.specialMoveQueue.filter((kind) => kind === "laceLash").length;
+    if (gumStompCount > 0) abilities.push(`Gum Stomp x${gumStompCount}`);
+    if (laceLashCount > 0) abilities.push(`Lace Lash x${laceLashCount}`);
+    const stock = abilities.length > 0 ? abilities.join(", ") : "no abilities banked";
+    return `${this.player.hearts}/${this.player.maxHearts} hearts, ${this.player.lives} ${this.player.lives === 1 ? "life" : "lives"}, ${this.buttons} pts, ${this.enemiesDefeated} defeated, ${stock}.`;
   }
 
   private updateCheckpoints() {
@@ -3869,7 +4118,9 @@ export class GameWorld {
         // Same reassign-not-mutate fix as updateLevelMarkers -- see its own comment.
         const litMaterial = this.createMaterial("checkpointLitMat", GOLD, GOLD);
         checkpoint.root.getChildMeshes().forEach((mesh) => { mesh.material = litMaterial; });
-        this.message = `Checkpoint stitched: ${checkpoint.label}.`;
+        const recap = this.buildCheckpointRecap();
+        this.message = `Checkpoint stitched: ${checkpoint.label}. ${recap}`;
+        if (this.isAgentRun) this.logAgent(`⚑ checkpoint ${checkpoint.label} — ${recap}`);
         this.spawnSparks(checkpoint.x, -3.1, GOLD, 16, 2.4);
         this.audio.playCheckpoint();
         this.publishUi(true);
@@ -3934,7 +4185,11 @@ export class GameWorld {
     this.cameraKickTimer = Math.max(0, this.cameraKickTimer - delta);
     const kick = this.cameraKickTimer > 0 ? Math.sin(this.titleTime * 44) * this.cameraKickStrength * (this.cameraKickTimer / 0.36) : 0;
     if (this.cameraKickTimer <= 0) this.cameraKickStrength = 0;
-    this.camera.position.y = -0.55 + kick * 0.32;
+    // Camera sits ~2.5 units above its look-at point over a 16-unit view distance (~9
+    // degrees of downward pitch, under the "10 degrees or less" the user asked for) so
+    // platform tops are actually visible instead of edge-on -- was a dead-level side view
+    // (camera.y was *below* target.y, if anything tilted very slightly upward).
+    this.camera.position.y = CAMERA_TILT_HEIGHT + kick * 0.32;
     this.camera.setTarget(new Vector3(this.camera.position.x + (spectator ? 4.6 : 1.2), -0.4 + kick * 0.1, 0));
 
     if (this.cameraZoomTimer > 0 && this.cameraZoomBase) {
@@ -3967,6 +4222,45 @@ export class GameWorld {
     this.sparks.push({ mesh: ring, velocity: new Vector3(0, 0.34, 0), life: 0.44, maxLife: 0.44, scaleRate: 2.8, rotationRate: 3.6, fade: true });
   }
 
+  /** Routes a landed hit through boss-tier multi-hit health (maxHits, see
+   * createMiniBoss/createTrueBoss) before falling through to an outright kill --
+   * "dancing around your enemies so you aren't killed while fighting" needs something to
+   * dance AROUND, so a mini-boss/true-boss now actually survives a hit and forces a real
+   * stagger beat instead of dropping the instant any attack connects, same as every regular
+   * enemy still does. Every real-combat hit site (tryLaceLash, tryGumStomp,
+   * performSuperKick, the jump-stomp collision) calls this instead of defeatEnemy directly;
+   * tryUltraMove and the scripted-only clearSuperRunEnemies sweep deliberately keep calling
+   * defeatEnemy straight through -- see their own comments for why. */
+  private damageEnemy(enemy: Enemy) {
+    if (!enemy.alive) return;
+    if (enemy.maxHits == null) {
+      this.defeatEnemy(enemy);
+      return;
+    }
+    enemy.hitsRemaining = (enemy.hitsRemaining ?? enemy.maxHits) - 1;
+    if (enemy.hitsRemaining <= 0) {
+      this.defeatEnemy(enemy);
+      return;
+    }
+    // Staggered, not defeated: force the same "recover" beat updateBossPattern already uses
+    // after a lunge (holds position, can't windup/lunge again yet) -- that beat IS the dodge
+    // window, held a little longer than its natural post-lunge length so retreating and
+    // re-engaging reads as a deliberate choice, not a coin flip against its normal cadence.
+    enemy.attackState = "recover";
+    enemy.attackTimer = 1.2;
+    // Same bounce defeatEnemy always gives a successful stomp -- without this, stomping a
+    // boss that survives left the player just standing on top of it with no bounce-back,
+    // since a stagger never reaches defeatEnemy's own player.vy line.
+    this.player.vy = Math.max(this.player.vy, 6.1);
+    this.triggerCinematicBeat(enemy.bossTier === "boss" ? 0.24 : 0.16, enemy.bossTier === "boss" ? 0.12 : 0.08);
+    this.spawnSparks(enemy.x, enemy.bottom + enemy.height * 0.6, CREAM, 14, 3.4);
+    this.spawnImpactRing(enemy.x, enemy.bottom + enemy.height * 0.6, CREAM, 0.9);
+    this.audio.playStomp(enemy.bossTier);
+    this.message = `${enemy.bossName ?? "The boss"} staggers -- ${enemy.hitsRemaining} more hit${enemy.hitsRemaining === 1 ? "" : "s"} to break through.`;
+    if (this.isAgentRun) this.logAgent(`⚔ ${enemy.bossName ?? enemy.kind} staggered -- ${enemy.hitsRemaining} hits left`);
+    this.publishUi(true);
+  }
+
   private defeatEnemy(enemy: Enemy) {
     if (!enemy.alive) return;
     enemy.alive = false;
@@ -3975,6 +4269,7 @@ export class GameWorld {
     this.player.vy = 6.1;
     if (enemy.bossTier === "boss") this.bossDefeated = true;
     if (this.isAgentRun) this.reportAgentOutcome(enemy, "enemy_defeated");
+    this.enemiesDefeated += 1;
     this.buttons += enemy.bossTier === "boss" ? 20 : enemy.bossTier === "mini" ? 8 : 4;
     this.message = enemy.bossTier === "boss"
       ? "BOSS DOWN: The Tangled Titan’s knot unravels from the rescue tower."
@@ -4205,15 +4500,15 @@ export class GameWorld {
       this.showPickupSplash("ULTRA MOVE!");
     }
     if (pickup.kind === "lash") {
-      this.player.laceLash = true;
-      this.message = "Lace Lash unlocked: press Q or tap LASH to crack the thread whip.";
+      this.player.specialMoveQueue.push("laceLash");
+      this.message = "Lace Lash added to storage: press X or tap SPECIAL MOVE to use it.";
       this.spawnSparks(pickup.x, pickup.y, CREAM, 20, 3.0);
       this.spawnImpactRing(pickup.x, pickup.y, CREAM, 1.15);
       this.showPickupSplash("LACE LASH!");
     }
     if (pickup.kind === "gum") {
-      this.player.gumStomp = true;
-      this.message = "Gum Stomp unlocked: press E or tap STOMP for sticky sole impact.";
+      this.player.specialMoveQueue.push("gumStomp");
+      this.message = "Gum Stomp added to storage: press X or tap SPECIAL MOVE to use it.";
       this.spawnSparks(pickup.x, pickup.y, MOSS, 24, 3.2);
       this.spawnImpactRing(pickup.x, pickup.y, MOSS, 1.2);
       this.showPickupSplash("GUM STOMP!");
@@ -4414,8 +4709,14 @@ export class GameWorld {
    * handful of callers -- spawnSparks/spawnImpactRing -- that genuinely need a private,
    * per-instance material because they animate its alpha continuously over a short
    * lifetime and explicitly dispose it themselves when done, see updateSparks). */
-  private createMaterial(name: string, diffuse: Color3, emissive: Color3, cache = true): StandardMaterial {
-    if (cache) {
+  /** flat=true is the "dull/8-bit sheen" treatment for background scenery (see
+   * createBackdrop): near-zero specular highlight and a much dimmer emissive glow, so
+   * non-interactive decor visually recedes behind the vivid pickups (see createPickup's
+   * glint) and enemies (see attachDarkAura) instead of competing with them for attention.
+   * Always bypasses the shared cache -- a flat variant must never be handed back for a
+   * plain lookup by a diffuse/emissive pair that some vivid object also happens to use. */
+  private createMaterial(name: string, diffuse: Color3, emissive: Color3, cache = true, flat = false): StandardMaterial {
+    if (cache && !flat) {
       const key = `${diffuse.r.toFixed(3)},${diffuse.g.toFixed(3)},${diffuse.b.toFixed(3)}|${emissive.r.toFixed(3)},${emissive.g.toFixed(3)},${emissive.b.toFixed(3)}`;
       const existing = this.materialCache.get(key);
       if (existing) return existing;
@@ -4429,9 +4730,9 @@ export class GameWorld {
     }
     const material = new StandardMaterial(name, this.scene);
     material.diffuseColor = diffuse;
-    material.emissiveColor = emissive.scale(0.14);
-    material.specularColor = new Color3(0.45, 0.42, 0.38);
-    material.specularPower = 48;
+    material.emissiveColor = emissive.scale(flat ? 0.045 : 0.14);
+    material.specularColor = flat ? new Color3(0.03, 0.03, 0.03) : new Color3(0.45, 0.42, 0.38);
+    material.specularPower = flat ? 4 : 48;
     return material;
   }
 
@@ -4476,8 +4777,8 @@ export class GameWorld {
       agentBackend: this.isAgentRun ? this.agentBackend : undefined,
       agentModel: this.isAgentRun ? this.agentModel : undefined,
       shoeForm: this.player.shoeForm,
-      laceLash: this.player.laceLash,
-      gumStomp: this.player.gumStomp,
+      specialMoveQueue: this.player.specialMoveQueue.slice(),
+      specialMoveReady: this.player.specialMoveCooldown <= 0,
       superJump: this.player.superJump,
       shoeFormAttack: this.shoeFormAttackLabel(),
       formAttackReady: Boolean(this.shoeFormAttackLabel()) && this.player.formAttackCooldown <= 0,

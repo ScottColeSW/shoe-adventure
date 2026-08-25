@@ -105,6 +105,12 @@ export interface DecisionResponse {
    * Dominion's InferenceClient.generate() documents. */
   choice: EnemyResponseChoice | PriorityActionChoice | null;
   fallback: boolean;
+  /** True when a live, parseable answer came back but disagreed with a well-established
+   * memory signal by a wide margin (see decide.ts's CONFIDENCE_OVERRIDE_MIN_SAMPLES/GAP) --
+   * an observation, not a correction: choice is always the model's own actual answer, never
+   * silently replaced. See DecisionRecord.disagreesWithMemory in history.ts. Never true at
+   * the same time as fallback: fallback means no usable live answer existed at all. */
+  disagreesWithMemory: boolean;
   backend: string;
   model: string;
   latencyMs: number;
