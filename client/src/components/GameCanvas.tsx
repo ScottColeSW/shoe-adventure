@@ -24,6 +24,8 @@ const initialSnapshot: UiSnapshot = {
   superRunCoverage: "0/0 power-ups · 0/0 enemies",
   agentActivity: "idle",
   agentLog: [],
+  agentRealAnswers: 0,
+  agentScriptedAnswers: 0,
   levelIndex: 1,
   levelCount: 6,
   levelLabel: "BUTTON TRAIL",
@@ -71,6 +73,7 @@ type Command =
   | "restart"
   | "pause"
   | "jump"
+  | "dropThrough"
   | "dash"
   | "specialMove"
   | "formAttack"
@@ -419,6 +422,10 @@ export default function GameCanvas() {
               ))
             )}
           </div>
+          <div className="agent-log-tally" aria-label={`${snapshot.agentRealAnswers} real model answers, ${snapshot.agentScriptedAnswers} scripted answers this run`}>
+            <span className="agent-log-tally-real"><b>{snapshot.agentRealAnswers}</b> real</span>
+            <span className="agent-log-tally-scripted"><b>{snapshot.agentScriptedAnswers}</b> scripted</span>
+          </div>
         </aside>
       )}
 
@@ -745,6 +752,7 @@ export default function GameCanvas() {
                 <span><kbd>A</kbd><kbd>D</kbd> or <kbd>←</kbd><kbd>→</kbd> RUN</span>
                 <span><kbd>W</kbd> or <kbd>SPACE</kbd> JUMP</span>
                 <span><kbd>S</kbd> or <kbd>SHIFT</kbd> LACE DASH</span>
+                <span><kbd>↓</kbd> DROP THROUGH</span>
                 <span><kbd>X</kbd> SPECIAL MOVE</span>
                 <span><kbd>F</kbd> FORM ATTACK</span>
                 <span><kbd>U</kbd> ULTRA MOVE</span>
@@ -771,6 +779,12 @@ export default function GameCanvas() {
               onPointerUp={() => dispatchCommand("releaseRight")}
               onPointerLeave={() => dispatchCommand("releaseRight")}
             >→</button>
+            <button
+              type="button"
+              aria-label="Drop through platform"
+              className="drop-through-touch"
+              onPointerDown={() => dispatchCommand("dropThrough")}
+            >↓</button>
           </div>
           <div className="touch-cluster touch-action">
             {snapshot.shoeFormAttack && <button type="button" className="form-touch" onPointerDown={() => dispatchCommand("formAttack")}>{snapshot.shoeFormAttack.split(" ")[0]}</button>}

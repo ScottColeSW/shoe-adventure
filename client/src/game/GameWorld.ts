@@ -87,6 +87,7 @@ type GameCommand =
   | "restart"
   | "pause"
   | "jump"
+  | "dropThrough"
   | "dash"
   | "specialMove"
   | "formAttack"
@@ -136,6 +137,10 @@ interface PlayerState {
   lives: number;
   invulnerable: number;
   jumpUsed: boolean;
+  /** Set by tryDropThrough (ArrowDown while grounded) -- while positive, the landing
+   * collision loop in updatePlayer skips every platform outright so a deliberate drop
+   * actually falls instead of re-landing on the same platform's top the very next frame. */
+  dropThroughTimer: number;
   dashTimer: number;
   dashCooldown: number;
   doubleJumps: number;
@@ -284,6 +289,10 @@ export interface UiSnapshot {
   /** Scrolling spectator-facing log of real agent decision calls and their outcomes --
    * see GameWorld.logAgent(). Oldest first, capped to the most recent 24 entries. */
   agentLog: string[];
+  /** Real-vs-scripted tally for this run only (reset in startAgentRun) -- see
+   * agentRealAnswers/agentScriptedAnswers' own comment for what counts as which. */
+  agentRealAnswers: number;
+  agentScriptedAnswers: number;
   levelIndex: number;
   levelCount: number;
   levelLabel: string;
@@ -510,11 +519,26 @@ export class GameWorld {
   private autoRepeatActive = false;
   private autoRepeatWins = 0;
   private autoRepeatLosses = 0;
+  /** Tallies every decision this run has resolved, split by whether a live model actually
+   * answered in time or the engine had to fall back to a scripted choice -- covers both
+   * decision types (goal + enemyResponse) and every fallback path (network failure, no
+   * usable reply, or an enemy arriving mid-request on the *other* track). Reset each run
+   * in startAgentRun() so the HUD reads this run's real-answer rate, not a running total
+   * across an entire auto-repeat batch. */
+  private agentRealAnswers = 0;
+  private agentScriptedAnswers = 0;
   /** Maps an enemy already asked about to the server-side decision row id (once known --
    * null until the response lands, or permanently null for a locally-resolved decision,
    * see handleAgentEnemyDecision's concurrency fallback) so reportAgentOutcome() can
-   * close the loop once the encounter actually resolves (see history.ts's getMemory). */
-  private readonly agentAskedEnemies = new Map<Enemy, { decisionId: number | null; askedAt: number }>();
+   * close the loop once the encounter actually resolves (see history.ts's getMemory).
+   * pendingOutcome: set when the encounter resolves (defeat/damage/avoided) *before* the
+   * real API response has landed and assigned a decisionId -- see reportAgentOutcome's own
+   * comment for why this can't just report immediately, and handleAgentEnemyDecision's
+   * .then for where the stashed outcome actually gets reported once the id shows up. */
+  private readonly agentAskedEnemies = new Map<
+    Enemy,
+    { decisionId: number | null; askedAt: number; pendingOutcome?: "enemy_defeated" | "player_damaged" | "avoided" }
+  >();
   /** The current periodic goal driving updateAgentRun's steering -- see
    * requestAgentGoal/steerByGoal. Replaces the old fixed x-threshold route script for
    * real agent runs; the scripted `?superrun` demo (updateSuperRun) never uses this. */
@@ -1402,6 +1426,7 @@ export class GameWorld {
       lives: STARTING_LIVES,
       invulnerable: 0,
       jumpUsed: false,
+      dropThroughTimer: 0,
       dashTimer: 0,
       dashCooldown: 0,
       doubleJumps: 0,
@@ -1980,13 +2005,14 @@ export class GameWorld {
     // consolidates the old separate Q (Lace Lash) and E (Gum Stomp) keys into X, one
     // button that uses whatever's next in storage (see tryUseSpecialMove). Dash moves onto
     // S (Shift still works too, kept as a soft-compat alias rather than removed outright).
-    if (["arrowleft", "arrowright", "arrowup", " ", "a", "d", "w", "s", "x", "f", "u", "shift", "r", "escape"].includes(key)) {
+    if (["arrowleft", "arrowright", "arrowup", "arrowdown", " ", "a", "d", "w", "s", "x", "f", "u", "shift", "r", "escape"].includes(key)) {
       event.preventDefault();
     }
     if (this.superRun && key !== "escape") return;
     if (key === "arrowleft" || key === "a") this.held.left = true;
     if (key === "arrowright" || key === "d") this.held.right = true;
     if (key === "arrowup" || key === "w" || key === " ") this.tryJump();
+    if (key === "arrowdown") this.tryDropThrough();
     if (key === "shift" || key === "s") this.tryDash();
     if (key === "x") this.tryUseSpecialMove();
     if (key === "f") this.tryShoeFormAttack();
@@ -2008,6 +2034,7 @@ export class GameWorld {
     if (command === "restart") this.restart();
     if (command === "pause") this.togglePause();
     if (command === "jump") this.tryJump();
+    if (command === "dropThrough") this.tryDropThrough();
     if (command === "dash") this.tryDash();
     if (command === "specialMove") this.tryUseSpecialMove();
     if (command === "formAttack") this.tryShoeFormAttack();
@@ -2230,6 +2257,18 @@ export class GameWorld {
    * or stops itself once either tally reaches AUTO_REPEAT_TARGET. A no-op the rest of the
    * time (autoRepeatActive stays false for an ordinary single run). */
   private handleRunEnded(result: "won" | "lost") {
+    // Closes the loop on this run's last still-open decision(s) -- a win, an out-of-lives
+    // loss, and a Time Trial timeout none go through damagePlayer's own report-and-clear
+    // (see its own comment), so whatever enemy/goal decision was still pending at the exact
+    // moment the run ended would otherwise sit at "unknown" forever, the same gap
+    // flushPendingEnemyOutcomes closed for screen transitions. Runs unconditionally, ahead
+    // of the auto-repeat-only logic below -- every run's decisions deserve a real outcome,
+    // not just the ones inside a batch.
+    this.flushPendingEnemyOutcomes();
+    if (this.agentGoalDecisionId != null) {
+      this.reportDecisionOutcome(this.agentGoalDecisionId, "avoided");
+      this.agentGoalDecisionId = null;
+    }
     if (!this.autoRepeatActive) return;
     if (result === "won") this.autoRepeatWins += 1;
     else this.autoRepeatLosses += 1;
@@ -2261,6 +2300,8 @@ export class GameWorld {
     this.agentStallStrikes = 0;
     this.despawnMonsterNest();
     this.agentLog.length = 0;
+    this.agentRealAnswers = 0;
+    this.agentScriptedAnswers = 0;
     this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
     this.message = "AGENT RUN: " + this.superRunAction;
     this.setAgentActivity("advancing", "STARTING RUN");
@@ -2407,6 +2448,17 @@ export class GameWorld {
       this.audio.playJump();
       this.publishUi(true);
     }
+  }
+
+  /** ArrowDown while standing on a raised platform: fall through it on purpose instead of
+   * needing to destroy it with a super move (Gum Stomp) just to descend. The base ground
+   * strip isn't in this.platforms at all (see updatePlayer's collision loop), so calling
+   * this while grounded there is a harmless no-op -- there's nothing to drop through. */
+  private tryDropThrough() {
+    if (this.mode !== "playing" || !this.player.grounded) return;
+    this.player.dropThroughTimer = 0.28;
+    this.player.grounded = false;
+    this.player.vy = Math.min(this.player.vy, -2);
   }
 
   private tryDash() {
@@ -3296,6 +3348,8 @@ export class GameWorld {
         // reporting against it, i.e. it went fine -- close it out as a positive outcome
         // before the id gets overwritten below. See this field's own docstring.
         if (this.agentGoalDecisionId != null) this.reportDecisionOutcome(this.agentGoalDecisionId, "avoided");
+        if (response?.choice) this.agentRealAnswers += 1;
+        else this.agentScriptedAnswers += 1;
         this.agentGoal = response?.choice ?? "advance";
         this.agentGoalDecisionId = response?.decisionId ?? null;
         this.setAgentActivity(this.activityForGoal(this.agentGoal), this.labelForGoal(this.agentGoal));
@@ -3311,6 +3365,7 @@ export class GameWorld {
       })
       .catch((error) => {
         if (this.disposed || error?.name === "AbortError") return; // quit() cancelled this on purpose
+        this.agentScriptedAnswers += 1;
         this.agentGoal = "advance";
         this.setAgentActivity("fallback", "ADVANCING");
         this.logAgent("⚠ goal fallback: advance (request failed)");
@@ -3360,8 +3415,16 @@ export class GameWorld {
     if (strandedPickup) {
       this.collectPickup(strandedPickup);
     } else if (!this.player.grounded === false) {
-      this.tryJump();
-      this.player.vx = this.player.facing * 6.4;
+      // Stalled while up on a raised platform (not the base ground strip, see
+      // tryDropThrough's own comment on why that distinction matters) most often means
+      // there's nowhere further to jump to from here -- the same situation a human player
+      // now has ArrowDown for. Try falling through before just re-jumping in place, which
+      // never actually changes anything if the platform ahead genuinely isn't there.
+      if (this.player.bottom > -4.1) this.tryDropThrough();
+      else {
+        this.tryJump();
+        this.player.vx = this.player.facing * 6.4;
+      }
     }
     // Standing still is no longer safe: force the whole nearby room onto the player
     // rather than just nudging position. Bosses are already always-aggro (see
@@ -3505,7 +3568,16 @@ export class GameWorld {
       .then((response: { choice?: AgentEnemyChoice | null; fallback?: boolean; disagreesWithMemory?: boolean; decisionId?: number; latencyMs?: number; prompt?: string; raw?: string | null } | null) => {
         if (this.disposed) return;
         const entry = this.agentAskedEnemies.get(enemy);
-        if (entry) entry.decisionId = response?.decisionId ?? null;
+        if (entry) {
+          entry.decisionId = response?.decisionId ?? null;
+          // The encounter already resolved (defeat/damage/avoided) before this response
+          // landed -- see reportAgentOutcome's own comment. Finish the report now that the
+          // id is actually known, rather than leaving the row stuck at "unknown".
+          if (entry.pendingOutcome) {
+            if (entry.decisionId != null) this.reportDecisionOutcome(entry.decisionId, entry.pendingOutcome);
+            this.agentAskedEnemies.delete(enemy);
+          }
+        }
         // The model's own choice always executes as given now -- see decide.ts's own
         // comment on why the old silent-override behavior got removed. A disagreement with
         // memory is worth noting (a "second opinion" for whoever reviews the log later,
@@ -3531,6 +3603,8 @@ export class GameWorld {
 
   private applyAgentEnemyChoice(enemy: Enemy, choice: AgentEnemyChoice | null, fallback: boolean) {
     if (this.disposed || !enemy.alive) return; // Defeated or off-route by the time the response landed.
+    if (fallback) this.agentScriptedAnswers += 1;
+    else this.agentRealAnswers += 1;
     this.superRunAction = fallback
       ? "AGENT FALLBACK — no usable reply in time; Right Shoe improvises the scripted response."
       : `AGENT CHOICE (${this.agentBackend}) — ${choice}.`;
@@ -3558,14 +3632,28 @@ export class GameWorld {
 
   /** Closes the loop on a decision's outcome once the encounter actually resolves (enemy
    * defeated, player took damage) -- see defeatEnemy/the sideHit branch in updateEnemies
-   * for the call sites, and checkAgentTimeouts for the "neither happened" case. Silently
-   * no-ops for decisions resolved locally via handleAgentEnemyDecision's concurrency
-   * fallback (decisionId stays null there -- nothing was actually recorded server-side). */
+   * for the call sites, and checkAgentTimeouts for the "neither happened" case.
+   *
+   * Live-tested against real accumulated data after the disposeScreen-flush fix (see
+   * flushPendingEnemyOutcomes' own comment) had already landed: ~40% of decisions were
+   * *still* stuck at "unknown". The remaining cause is a narrower race in the same family --
+   * a real API call is genuinely in flight (decisionId is null only because the response
+   * hasn't landed yet, not because nothing was recorded), and the encounter resolves
+   * (defeat, damage, or the 6s/screen-transition "avoided" sweep) before it does. The old
+   * code just dropped the outcome and deleted the entry here, so when the response *did*
+   * arrive a few hundred ms later, handleAgentEnemyDecision's .then found no entry to
+   * attach the real decisionId to -- a server-side row existed but nothing ever told it
+   * what happened. Stash the outcome instead of discarding it, and leave the entry in
+   * place so .then can find it and finish the report once the id is actually known. */
   private reportAgentOutcome(enemy: Enemy, outcome: "enemy_defeated" | "player_damaged" | "avoided") {
     const entry = this.agentAskedEnemies.get(enemy);
     if (!entry) return;
-    this.agentAskedEnemies.delete(enemy);
-    if (entry.decisionId != null) this.reportDecisionOutcome(entry.decisionId, outcome);
+    if (entry.decisionId != null) {
+      this.agentAskedEnemies.delete(enemy);
+      this.reportDecisionOutcome(entry.decisionId, outcome);
+      return;
+    }
+    entry.pendingOutcome = outcome;
   }
 
   /** Live-tested against real accumulated data: 76% of enemyResponse decisions were
@@ -3760,6 +3848,7 @@ export class GameWorld {
 
   private updatePlayer(delta: number) {
     this.player.invulnerable = Math.max(0, this.player.invulnerable - delta);
+    this.player.dropThroughTimer = Math.max(0, this.player.dropThroughTimer - delta);
     this.player.dashTimer = Math.max(0, this.player.dashTimer - delta);
     this.player.dashCooldown = Math.max(0, this.player.dashCooldown - delta);
     this.player.specialMoveCooldown = Math.max(0, this.player.specialMoveCooldown - delta);
@@ -3797,7 +3886,7 @@ export class GameWorld {
     if (trueBoss) this.player.x = Math.min(this.player.x, trueBoss.maxX + 1.2);
     this.player.grounded = false;
 
-    if (this.player.vy <= 0) {
+    if (this.player.vy <= 0 && this.player.dropThroughTimer <= 0) {
       for (const platform of this.platforms) {
         if (platform.crumbled) continue; // vanished: no collision until it respawns
         const overlapX = this.player.x + PLAYER_WIDTH / 2 > platform.x - platform.width / 2 && this.player.x - PLAYER_WIDTH / 2 < platform.x + platform.width / 2;
@@ -4846,6 +4935,8 @@ export class GameWorld {
       agentActivity: this.agentActivity,
       agentActivityTarget: this.agentActivityTarget || undefined,
       agentLog: [...this.agentLog],
+      agentRealAnswers: this.agentRealAnswers,
+      agentScriptedAnswers: this.agentScriptedAnswers,
       levelIndex: this.levelIndex,
       levelCount: LEVEL_COUNT,
       levelLabel: LEVEL_LABELS[this.levelIndex - 1],

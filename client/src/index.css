@@ -556,6 +556,22 @@ button:focus-visible {
 .agent-log-line:not(:last-child) { border-bottom: 1px solid rgba(255, 245, 221, 0.08); }
 .agent-log-empty { color: rgba(255, 245, 221, 0.45); font-style: italic; }
 
+/* Below the scrolling log: how much of this run's decisions were a live model answer
+   vs. an engine-side scripted fallback -- the spectator-facing counterpart to the
+   fallbackRate the stats page already tracks server-side. */
+.agent-log-tally {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.35rem 0.55rem;
+  border-top: 1px dashed rgba(255, 224, 144, 0.35);
+  font-size: 0.667rem;
+  letter-spacing: 0.04em;
+}
+.agent-log-tally-real { color: #9be8ff; }
+.agent-log-tally-scripted { color: rgba(255, 245, 221, 0.6); }
+.agent-log-tally b { font-variant-numeric: tabular-nums; }
+
 .pickup-splash {
   --tilt: -4deg;
   position: fixed;

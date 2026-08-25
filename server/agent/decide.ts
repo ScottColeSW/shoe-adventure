@@ -213,8 +213,18 @@ function summarizeMemory(keys: ContextKeys): { line: string; entries: MemoryEntr
   const summary = entries
     .map((entry) => `${entry.choice}: ~${Math.round(entry.successRate * 100)}% estimated success (Bayesian, from ${entry.samples} direct ${entry.samples === 1 ? "try" : "tries"} plus related experience)`)
     .join("; ");
+  // The plain imperative alone ("prefer the top-ranked option") didn't move real behavior
+  // much -- see CONFIDENCE_OVERRIDE_GAP's own comment: advance still won 94% of the time
+  // even when collect_pickup's own numbers, sitting right above it, were clearly better.
+  // A concrete worked example of the exact reasoning step is a different, additive nudge
+  // (still just more prompt content the model can take or leave, not a structural change
+  // to what's on offer) -- worth trying since the abstract instruction alone didn't work.
+  const topChoice = entries[0]?.choice;
+  const example = topChoice
+    ? ` For example, if ${topChoice} has the highest success rate above, that is normally the answer -- pick something else only when this specific moment (hearts low, an ability ready, terrain) genuinely argues against it.`
+    : "";
   return {
-    line: `From past encounters like this, ranked highest success first: ${summary}. Prefer the top-ranked option unless something specific about this exact moment (hearts low, a better ability ready, terrain) argues for a different one.`,
+    line: `From past encounters like this, ranked highest success first: ${summary}.${example}`,
     entries,
   };
 }
@@ -272,13 +282,19 @@ function buildPriorityActionPrompt(request: DecisionRequest, memoryLine: string)
     `Terrain ahead: ${terrain}. Jump timing is automatic -- you don't need to time jumps yourself, just judge whether the terrain ahead makes advancing, fighting, or dashing the safer call.`,
     `The level exit marker (or Left Shoe, on the final level) is ${nextObjective.distance.toFixed(1)} units ahead.`,
     memoryLine || null,
+    // "advance" listed last, not first -- real data showed it winning 89-94% of the time
+    // even when the memory numbers right above clearly favored something else (see
+    // summarizeMemory's own comment). Being the first-listed option in a "pick one of
+    // these" prompt is a known bias for small models independent of which option is
+    // actually best; moving the default to the end removes that specific skew without
+    // taking advance off the table or otherwise steering the actual answer.
     "Available goals:",
-    "- advance: keep moving toward the level exit marker distance given above",
     "- collect_pickup: go get the nearest pickup",
     "- engage_enemy: move toward and fight the nearest enemy",
     player.dashReady ? "- use_dash: burst forward immediately, useful to clear a gap or crumbling platform quickly" : null,
     player.ultraReady ? "- use_ultra: unleash the Ultra Move immediately" : null,
-    "Reply with exactly one word: advance, collect_pickup, engage_enemy, use_dash, or use_ultra.",
+    "- advance: keep moving toward the level exit marker distance given above -- the default when nothing else applies",
+    "Reply with exactly one word: collect_pickup, engage_enemy, use_dash, use_ultra, or advance.",
   ]
     .filter(Boolean)
     .join("\n");

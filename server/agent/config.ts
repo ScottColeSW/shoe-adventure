@@ -18,8 +18,16 @@ export const agentConfig = {
    * ~4000-4030ms with `fallback: true` -- 4s isn't enough for CPU inference, especially
    * cold. Once decide.ts has enough successful-call history for a specific backend+model
    * (see getLatencyProfile), it tightens the actual per-request timeout toward that
-   * model's own observed p90 latency instead of always using this ceiling. */
-  decisionTimeoutMs: Number(process.env.SHOE_DECISION_TIMEOUT_MS) || 10000,
+   * model's own observed p90 latency instead of always using this ceiling.
+   * Raised again from 10000: real accumulated data showed gemma4:26b averaging ~10012ms --
+   * right on top of the old ceiling, so roughly half its calls missed by pure chance and
+   * (latency being right-skewed in practice) nearly all of them actually did: 11/11 logged
+   * calls came back fallback:true. Worse, this ceiling is a deadlock for any model stuck
+   * this slow -- getLatencyProfile only has data to tighten *toward* once a model reaches
+   * decisionLatencySamplesToTighten successful calls, and a model that never succeeds can
+   * never accumulate any. Real headroom here is what gives a big/slow model an honest shot
+   * instead of being structurally unable to ever clear the bar. */
+  decisionTimeoutMs: Number(process.env.SHOE_DECISION_TIMEOUT_MS) || 15000,
   /** Once a backend+model has this many successful (non-fallback) calls on record,
    * decide.ts trusts getLatencyProfile's p90 over the learning-phase ceiling above.
    * Was 8 -- live-tested, and 8 fast calls from one run under light load were enough to
