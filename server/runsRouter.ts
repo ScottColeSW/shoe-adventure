@@ -6,6 +6,7 @@
 
 import express, { Router } from "express";
 import { recordRun, getLeaderboard } from "./runs";
+import { markRunWon } from "./agent/history";
 
 export const runsRouter: Router = Router();
 
@@ -40,6 +41,11 @@ runsRouter.post("/complete", (req, res) => {
     hearts: body.hearts,
     buttons: body.buttons,
   });
+  // Every POST here already represents a win -- GameWorld.ts's recordRunCompletion (the
+  // only caller) fires exclusively from checkRescue()'s win branch, losses never reach
+  // this route at all. "agent" only: a human's own win shouldn't reward the agent memory,
+  // there's no decisions-table row for a human playthrough to mark in the first place.
+  if (body.mode === "agent") markRunWon(body.runId);
   res.json({ ok: true });
 });
 

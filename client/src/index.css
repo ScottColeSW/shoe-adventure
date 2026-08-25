@@ -352,7 +352,9 @@ button:focus-visible {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 2rem;
+  justify-content: space-between;
+  gap: clamp(2rem, 7vw, 6rem);
+  width: min(94vw, 68rem);
   height: 4.4rem;
   padding: 0 0.4rem;
   /* Deliberately not overflow-x:auto -- CSS coerces a "visible" opposite axis to auto

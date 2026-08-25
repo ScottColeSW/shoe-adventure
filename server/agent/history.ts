@@ -92,6 +92,9 @@ function getDb(): Database.Database {
   // Existing rows default to 1 -- see CURRENT_GENERATION's own comment. Everything on disk
   // before this column existed predates every generation-2 change by definition.
   ensureColumn(db, "decisions", "generation", "INTEGER NOT NULL DEFAULT 1");
+  // Set retroactively by markRunWon once a run actually wins -- see its own comment and
+  // WIN_REWARD_MULTIPLIER in queryOutcomeCounts for why this exists at all.
+  ensureColumn(db, "decisions", "run_won", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 
@@ -157,6 +160,25 @@ export function recordOutcome(id: number, outcome: DecisionRecord["outcome"]): v
   }
 }
 
+/** The "big reward" for actually winning, not just for a locally-good outcome -- the
+ * Bayesian memory previously only ever knew about *local* per-decision outcomes
+ * (enemy_defeated/player_damaged/avoided), with no concept of whether the run those
+ * decisions belonged to actually won. A choice that helped win and the same choice in a
+ * run that later died looked identical to it. Called once, retroactively, the moment a
+ * run actually wins (see runsRouter.ts's /complete handler -- every POST there already
+ * represents a win, see GameWorld.ts's recordRunCompletion, which is only ever called
+ * from checkRescue()'s win branch). Marks every decision from that run so
+ * queryOutcomeCounts can weight them higher, letting win-correlated choices float to the
+ * top of getMemory's rankings on their own over enough real runs -- not a hardcoded
+ * priority in the prompt, the same posterior math that already ranks everything else. */
+export function markRunWon(runId: string): void {
+  try {
+    getDb().prepare(`UPDATE decisions SET run_won = 1 WHERE run_id = @runId`).run({ runId });
+  } catch (error) {
+    console.error(JSON.stringify({ event: "agent_history_run_won_write_failed", error: String(error) }));
+  }
+}
+
 export interface MemoryEntry {
   choice: string;
   /** Posterior mean (alpha / (alpha + beta)) -- a genuine Bayesian estimate, not a raw
@@ -171,6 +193,16 @@ export interface MemoryEntry {
   beta: number;
 }
 
+/** A success that was also part of a run that actually won counts this many times over
+ * an ordinary success -- see markRunWon's own comment for the reasoning. Only applied to
+ * already-successful outcomes (enemy_defeated/avoided): a player_damaged decision doesn't
+ * get rehabilitated just because the run survived it anyway, it's still locally a hit
+ * taken. 3x is a first cut, not a tuned constant -- there isn't enough won-run data yet
+ * (generation 2 is brand new) to know the right strength, but the mechanism is what
+ * matters: this is still the same posterior math every other choice goes through, not a
+ * hardcoded priority order in the prompt. */
+const WIN_REWARD_MULTIPLIER = 3;
+
 /** column is a trusted internal literal (never user input) -- selects which of the two
  * indexed key columns to match against, see getMemory. */
 function queryOutcomeCounts(column: "context_key" | "context_key_general", key: string): Map<string, { success: number; failure: number }> {
@@ -182,15 +214,18 @@ function queryOutcomeCounts(column: "context_key" | "context_key_general", key: 
   // actually informs a real decision.
   const rows = getDb()
     .prepare(
-      `SELECT choice, outcome, COUNT(*) as count FROM decisions
+      `SELECT choice, outcome, run_won as runWon, COUNT(*) as count FROM decisions
        WHERE ${column} = @key AND outcome != 'unknown' AND choice IS NOT NULL AND generation = @generation
-       GROUP BY choice, outcome`,
+       GROUP BY choice, outcome, run_won`,
     )
-    .all({ key, generation: CURRENT_GENERATION }) as Array<{ choice: string; outcome: string; count: number }>;
+    .all({ key, generation: CURRENT_GENERATION }) as Array<{ choice: string; outcome: string; runWon: number; count: number }>;
   for (const row of rows) {
     const bucket = byChoice.get(row.choice) ?? { success: 0, failure: 0 };
-    if (row.outcome === "enemy_defeated" || row.outcome === "avoided") bucket.success += row.count;
-    else if (row.outcome === "player_damaged") bucket.failure += row.count;
+    if (row.outcome === "enemy_defeated" || row.outcome === "avoided") {
+      bucket.success += row.count * (row.runWon ? WIN_REWARD_MULTIPLIER : 1);
+    } else if (row.outcome === "player_damaged") {
+      bucket.failure += row.count;
+    }
     byChoice.set(row.choice, bucket);
   }
   return byChoice;

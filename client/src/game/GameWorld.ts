@@ -5,6 +5,7 @@ import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
+import { VertexBuffer } from "@babylonjs/core/Meshes/buffer";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Scene } from "@babylonjs/core/scene";
@@ -421,6 +422,23 @@ const ENEMY_LEASH = 2.5;
 /** Agent-run stall watchdog thresholds -- see checkAgentStall(). */
 const AGENT_STALL_TIMEOUT = 9;
 const AGENT_STALL_DISTANCE = 0.6;
+/** How much closer a new pickup/enemy candidate has to be than the currently-targeted one
+ * before steerByGoal actually switches -- see its own comment on the jitter this prevents. */
+const STEER_RETARGET_MARGIN = 1.5;
+/** buildScreenContent's floating platforms (fixed 0.8 height) never generate closer to the
+ * ground strip (top at -4.2) than one full platform height of clearance -- the user's own
+ * diagnosis of both the "dropped straight through what looked like solid road" visual bug
+ * and a real mechanical one: a platform whose own bottom face could dip level with or below
+ * the ground plane at the old floor of -4.0 (bottom -4.4, actually *under* the ground's
+ * -4.2 top). py >= -4.2 + 0.8(platform height) + 0.4(half the platform's own height, since
+ * py is its center) = -3.0. */
+const MIN_PLATFORM_Y = -3.0;
+/** The agent's own automatic drop-through triggers (the proactive reflex and the stall
+ * watchdog) only fire above this height, not tryDropThrough itself -- a human pressing
+ * ArrowDown can drop from anywhere. Same value as MIN_PLATFORM_Y and the same reasoning:
+ * now that no platform generates below it, anything at or above genuinely reads as
+ * "elevated" rather than being mistakable for the ground strip itself. */
+const AGENT_DROP_THROUGH_MIN_HEIGHT = MIN_PLATFORM_Y;
 /** See spawnMonsterNest/updateMonsterNest -- how often a live nest produces a fresh
  * enemy, and the hard cap on how many it ever produces before going quiet. */
 const MONSTER_NEST_SPAWN_INTERVAL = 2.6;
@@ -543,6 +561,12 @@ export class GameWorld {
    * requestAgentGoal/steerByGoal. Replaces the old fixed x-threshold route script for
    * real agent runs; the scripted `?superrun` demo (updateSuperRun) never uses this. */
   private agentGoal: AgentGoal = "advance";
+  /** Sticky steering target for collect_pickup/engage_enemy -- see steerByGoal's own
+   * comment on the live-observed bug this fixes (rapid held.left/held.right flipping,
+   * visible as the character jittering left-right in place near two similarly-distant
+   * candidates, making no net progress until the stall watchdog eventually intervened). */
+  private agentPickupTarget: Pickup | null = null;
+  private agentEnemyTarget: Enemy | null = null;
   /** Counts down to the next requestAgentGoal() call -- reset only once the previous
    * call resolves (success or fallback), never on a fixed wall-clock schedule, so cadence
    * naturally adapts to real model latency instead of stacking calls behind a slow one. */
@@ -559,6 +583,17 @@ export class GameWorld {
    * checkAgentStall) rather than leaving a free-choosing agent stuck at a gated lane. */
   private agentStallTimer = 0;
   private agentStallX = 0;
+  /** How long the agent has been grounded on a raised platform with nothing ahead worth
+   * jumping to -- see updateAgentRun's own drop-through reflex. A short grace window, not
+   * an instant trigger: long enough that landing on a wide platform still lets a nearby
+   * pickup/enemy interaction resolve normally before giving up on it and dropping back
+   * down to keep moving. */
+  private noPlatformAheadTimer = 0;
+  /** Tracks the reactive jump repeatedly firing against the same gap without clearing it
+   * -- see updateAgentRun's own comment on the live-reported "looks like it doesn't know
+   * it's on a platform" bug this fixes. */
+  private repeatedJumpAttempts = 0;
+  private lastReactiveJumpX = 0;
   /** Same idea as agentStallTimer/agentStallX, much blunter -- the scripted demo has no
    * decision loop to retry from, so a stall here (see checkSuperRunStall) just forces its
    * way past whatever's blocking rather than nudging and re-evaluating. Exists because a
@@ -865,7 +900,7 @@ export class GameWorld {
     // means "occasionally impossible."
     const platformXs: number[] = [];
     const platformYs: number[] = [];
-    let py = -3.5;
+    let py = MIN_PLATFORM_Y;
     let px = 6.5;
     let flatRun = 0;
     let i = 0;
@@ -884,7 +919,7 @@ export class GameWorld {
         // dedicated upper-path branch below.
         climb = (roll < 0.6 ? 1 : -1) * (0.6 + Math.random() * 0.9);
       }
-      py = Math.max(-4.0, Math.min(4.6, py + climb));
+      py = Math.max(MIN_PLATFORM_Y, Math.min(4.6, py + climb));
       // A real shortcut on a big upward step -- matches the original hand-built world's
       // own "bounce pad = faster route up" intent -- rather than every kind purely
       // cycling in a fixed rotation regardless of what the step actually calls for.
@@ -1172,6 +1207,54 @@ export class GameWorld {
     material.specularColor = new Color3(0.35, 0.21, 0.1);
     if (kind === "crumble") material.alpha = 0.88;
     mesh.material = material;
+
+    if (kind === "cardboard") {
+      // Crumpled-cardboard surface on the ground strips specifically -- a flat box reads
+      // as "just the road," easy to mistake for solid, un-droppable ground even though
+      // it's a platform like any other kind (see AGENT_DROP_THROUGH_MIN_HEIGHT's own
+      // comment on that exact live-reported confusion). A subdivided overlay plane with
+      // small random per-vertex bumps gives it real surface texture without touching the
+      // flat platform.top collision value below -- purely decorative, parented so
+      // disposeScreen()'s mesh.dispose() cascades to it same as the tape strip.
+      const crinkle = MeshBuilder.CreateGround(`crinkle-${x}`, { width, height: 1.45, subdivisions: Math.max(8, Math.round(width * 2.6)) }, this.scene);
+      crinkle.parent = mesh;
+      crinkle.position = new Vector3(0, height / 2 + 0.015, 0);
+      const positions = crinkle.getVerticesData(VertexBuffer.PositionKind);
+      if (positions) {
+        // Crooked and jagged, not just gently bumpy -- a chaotic per-vertex jitter across
+        // all three axes (not only up/down) so the surface reads as torn cardboard rather
+        // than a smooth plane with a light wave in it. Still purely decorative: this
+        // overlay carries no collision, so however rough it gets, the flat platform.top
+        // value below is what the player actually stands on.
+        const colors: number[] = [];
+        for (let v = 0; v < positions.length; v += 3) {
+          const riseJitter = (Math.random() - 0.5) * 0.26;
+          positions[v] += (Math.random() - 0.5) * 0.16;
+          positions[v + 1] += riseJitter;
+          positions[v + 2] += (Math.random() - 0.5) * 0.12;
+          // Cheap painterly shading, no texture involved (this project stays
+          // procedural-only): a valley reads as a creased shadow, a ridge as a lit fold,
+          // using the same jitter that already shaped the geometry rather than a second
+          // unrelated random roll -- shading and shape agree with each other instead of
+          // each doing their own thing, which is what actually sells "crumpled paper"
+          // over "bumpy blob." Kept subtle (0.72-1.0) -- ambience, not a spotlight.
+          const shade = 0.72 + (riseJitter / 0.13 + 1) * 0.14;
+          colors.push(shade, shade, shade, 1);
+        }
+        crinkle.updateVerticesData(VertexBuffer.PositionKind, positions);
+        crinkle.setVerticesData(VertexBuffer.ColorKind, colors);
+        crinkle.createNormals(true);
+      }
+      // flat: true (low, tight specular instead of the default bright/wide one) --
+      // live-reported bug: with the default shiny material, hundreds of small
+      // random-angle facets from the jitter above caught the fixed directional light
+      // differently as the side-scroll camera panned, reading as the road's surface
+      // itself shifting/glinting in step with the player rather than staying put. The
+      // geometry never moved; only the specular highlight did. Matte kills that without
+      // undoing the crookedness itself.
+      crinkle.material = this.createMaterial(`crinkleMat-${x}`, palette.cardboard.scale(1.1), palette.cardboard.scale(0.14), true, true);
+      crinkle.isPickable = false;
+    }
 
     if (kind === "bouncePad") {
       // A glowing ring on top signals "this one launches you" before the player lands.
@@ -2302,6 +2385,8 @@ export class GameWorld {
     this.agentLog.length = 0;
     this.agentRealAnswers = 0;
     this.agentScriptedAnswers = 0;
+    this.repeatedJumpAttempts = 0;
+    this.lastReactiveJumpX = this.player.x;
     this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
     this.message = "AGENT RUN: " + this.superRunAction;
     this.setAgentActivity("advancing", "STARTING RUN");
@@ -3137,7 +3222,54 @@ export class GameWorld {
         platform.x - platform.width / 2 - this.player.x < 2.35 &&
         platform.top > this.player.bottom + 0.18,
     );
-    if (this.player.grounded && platformAhead) this.tryJump();
+    if (this.player.grounded && platformAhead) {
+      // Live-reported bug: a jump that falls just short of clearing the gap lands the
+      // player back where they started -- still grounded, platformAhead still true --
+      // so this refires and repeats the exact same jump, over and over, with no net
+      // progress. Looked like the character "doesn't know it's on a platform" or is
+      // floating in place, and burned real time doing nothing. Only escalates using a
+      // dash charge the player actually has (dashCharges > 0) -- never grants one that
+      // wasn't earned -- so a run with no dash pickup yet still just jumps, same as
+      // before; this only kicks in once there's a real charge to spend.
+      if (Math.abs(this.player.x - this.lastReactiveJumpX) < 1.0) this.repeatedJumpAttempts += 1;
+      else this.repeatedJumpAttempts = 0;
+      this.lastReactiveJumpX = this.player.x;
+      if (this.repeatedJumpAttempts >= 2 && this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
+      // Live-reported: a collectible sitting high enough above the player that no single
+      // jump (dash-boosted or not) can reach it from directly underneath -- the real route
+      // up is a staircase that starts *behind* the player, which plain "steer toward the
+      // target's x" can never discover, so it just walks into the same wall forever.
+      // Genuine backward pathfinding is a much bigger feature than this warrants; skipping
+      // an unreachable target once repeated attempts (plain jump, then a dash-boosted one)
+      // have both already failed is the same "move backward or skip it" the user offered,
+      // minus the part this engine can't safely do on its own. Clearing the sticky target
+      // here lets steerByGoal's own nearest-candidate search pick something else next call
+      // instead of holding onto a target that's already been shown to be out of reach.
+      if (this.repeatedJumpAttempts >= 5) {
+        this.agentPickupTarget = null;
+        this.agentEnemyTarget = null;
+        this.repeatedJumpAttempts = 0;
+      }
+      this.tryJump();
+    }
+
+    // Reactive counterpart to the jump trigger above: nothing ahead worth jumping to, and
+    // still up on a raised platform (not the base ground strip -- see tryDropThrough's own
+    // comment), most often means the level's own upper bonus branch or a similar dead end
+    // (see buildScreenContent's own comment: those are built to end in open air with "no
+    // forced landing platform back down"). Walking to the platform's actual edge would
+    // eventually fall off it naturally anyway; this just doesn't make the agent wait that
+    // long once there's genuinely nothing left to do up here. The stall-only version of
+    // this (checkAgentStall) predates it and stays as a backstop for whatever this misses.
+    if (this.player.grounded && !platformAhead && this.player.bottom > AGENT_DROP_THROUGH_MIN_HEIGHT) {
+      this.noPlatformAheadTimer += delta;
+      if (this.noPlatformAheadTimer > 1.5) {
+        this.tryDropThrough();
+        this.noPlatformAheadTimer = 0;
+      }
+    } else {
+      this.noPlatformAheadTimer = 0;
+    }
 
     // A near-certain-correct reflex, not worth a network round trip: fire Ultra Move
     // the instant the boss is in range and ready.
@@ -3241,27 +3373,39 @@ export class GameWorld {
       if (this.player.ultraMove && this.player.ultraCooldown <= 0) this.tryUltraMove();
       this.agentGoal = "advance";
     } else if (this.agentGoal === "collect_pickup") {
-      const nearest = this.pickups
-        .filter((p) => !p.collected)
-        .sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))[0];
+      const candidates = this.pickups.filter((p) => !p.collected);
+      const nearest = candidates.slice().sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))[0];
+      // Sticky targeting, not "nearest" recomputed fresh every frame -- live-observed bug:
+      // two pickups sitting at a similar distance on opposite sides of the player made
+      // "nearest" flip back and forth frame to frame as the player's own x shifted by a
+      // hair, which flipped held.left/held.right just as fast -- visible as the character
+      // jittering left-right-left-right in place, making no net progress until the stall
+      // watchdog eventually forced a way past it. Keep the current target unless it's gone
+      // or something is genuinely (not marginally) closer.
+      const sticky = this.agentPickupTarget && candidates.includes(this.agentPickupTarget) ? this.agentPickupTarget : null;
+      const target = sticky && (!nearest || Math.abs(sticky.x - this.player.x) <= Math.abs(nearest.x - this.player.x) + STEER_RETARGET_MARGIN) ? sticky : nearest;
+      this.agentPickupTarget = target ?? null;
       // Live-tested: "collect_pickup" chasing something several units behind the player
       // directly fights "reach the screen exit" -- the actual win condition per screen --
       // with nothing to arbitrate between them. A pickup barely behind (already all but
       // reached) is harmless; anything further back isn't worth abandoning progress for,
       // so steering falls back to the same forward pull "advance" uses instead.
-      if (nearest && nearest.x < this.player.x - 2.5) this.steerTowardObjective();
+      if (target && target.x < this.player.x - 2.5) this.steerTowardObjective();
       else {
-        this.held.right = !nearest || nearest.x >= this.player.x;
-        this.held.left = Boolean(nearest) && nearest.x < this.player.x;
+        this.held.right = !target || target.x >= this.player.x;
+        this.held.left = Boolean(target) && target.x < this.player.x;
       }
     } else if (this.agentGoal === "engage_enemy") {
-      const nearest = this.enemies
-        .filter((e) => e.alive)
-        .sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))[0];
-      if (nearest && nearest.x < this.player.x - 2.5) this.steerTowardObjective();
+      const candidates = this.enemies.filter((e) => e.alive);
+      const nearest = candidates.slice().sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))[0];
+      // Same sticky-targeting fix as collect_pickup above, same reasoning.
+      const sticky = this.agentEnemyTarget && candidates.includes(this.agentEnemyTarget) ? this.agentEnemyTarget : null;
+      const target = sticky && (!nearest || Math.abs(sticky.x - this.player.x) <= Math.abs(nearest.x - this.player.x) + STEER_RETARGET_MARGIN) ? sticky : nearest;
+      this.agentEnemyTarget = target ?? null;
+      if (target && target.x < this.player.x - 2.5) this.steerTowardObjective();
       else {
-        this.held.right = !nearest || nearest.x >= this.player.x;
-        this.held.left = Boolean(nearest) && nearest.x < this.player.x;
+        this.held.right = !target || target.x >= this.player.x;
+        this.held.left = Boolean(target) && target.x < this.player.x;
       }
     } else {
       this.steerTowardObjective();
@@ -3420,7 +3564,7 @@ export class GameWorld {
       // there's nowhere further to jump to from here -- the same situation a human player
       // now has ArrowDown for. Try falling through before just re-jumping in place, which
       // never actually changes anything if the platform ahead genuinely isn't there.
-      if (this.player.bottom > -4.1) this.tryDropThrough();
+      if (this.player.bottom > AGENT_DROP_THROUGH_MIN_HEIGHT) this.tryDropThrough();
       else {
         this.tryJump();
         this.player.vx = this.player.facing * 6.4;
@@ -3623,7 +3767,15 @@ export class GameWorld {
       // A real dodge now: a reflexive hop, which clears the same height gate updateEnemies'
       // sideHit check uses, plus a brief invulnerability window as a safety net so a dodge
       // the model chose never fails just from bad luck on the exact arc.
+      // Second live-tested fix: the hop alone still lost against an *aggro'd, chasing*
+      // enemy (see updateEnemies' ENEMY_AGGRO_RANGE) -- it closes distance back in just as
+      // fast as the player moved away, so "collect_pickup" steering straight at a pickup
+      // behind a chasing enemy re-triggered avoid over and over at the exact same spot,
+      // zero net progress, live-observed for 8+ real seconds in one run. A real horizontal
+      // burst in whichever direction the player is already trying to go (facing, driven by
+      // the current steering) actually breaks contact instead of just leaving the ground.
       if (this.player.grounded) this.player.vy = Math.max(this.player.vy, 6.2);
+      this.player.vx = this.player.facing * Math.max(Math.abs(this.player.vx), 13);
       this.player.invulnerable = Math.max(this.player.invulnerable, 0.6);
     } else this.performSuperKick(enemy);
 
@@ -4052,7 +4204,20 @@ export class GameWorld {
       const enemyTop = enemy.bottom + enemy.height;
       const stomp = horizontal && this.player.vy < -1.5 && this.player.bottom <= enemyTop + 0.28 && playerTop >= enemy.bottom;
       const sideHit = horizontal && this.player.bottom < enemyTop - 0.08 && playerTop > enemy.bottom + 0.12;
-      if (stomp && enemy.bossTier !== "boss") {
+      // Real bug this fixed: the true boss never took stomp damage (bossTier !== "boss"
+      // guard below), but a stomp attempt that didn't match that guard fell all the way
+      // through to the sideHit branch instead of stopping here -- so jumping on its head
+      // registered as the *player* getting hit, sometimes for a lunge's full maxHearts,
+      // just for trying the one move that works on every other enemy in the game. A stomp
+      // on the true boss now bounces off harmlessly instead, same shape as Gum Turret's
+      // shell -- Ultra Move stays the real way through it (see damageEnemy's own comment),
+      // this just stops the attempt itself from being punished.
+      if (stomp && enemy.bossTier === "boss") {
+        this.player.vy = Math.max(this.player.vy, 5.4);
+        this.spawnSparks(enemy.x, enemy.bottom + enemy.height * 0.9, VIOLET, 8, 2.2);
+        this.message = `${enemy.bossName ?? "The Tangled Titan"} shrugs off the stomp -- this one needs the Ultra Move.`;
+        this.publishUi(true);
+      } else if (stomp) {
         if (enemy.gumArmored) {
           // Only tryGumStomp can defeat this one; an ordinary jump-stomp just bounces
           // off, so the ability keeps a reason to matter when it finally comes up.
