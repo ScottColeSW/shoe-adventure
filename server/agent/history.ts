@@ -36,6 +36,22 @@ export interface DecisionRecord {
   contextKeyGeneral: string;
 }
 
+/** Bumped whenever a change lands that meaningfully invalidates prior decisions as a fair
+ * comparison point for future ones -- a different prompt (different framing, different
+ * option order), a fixed bug in how outcomes get recorded, anything that changes what the
+ * numbers actually mean. recordDecision always stamps new rows with the current value;
+ * getMemory/getStats only ever look at rows from the current generation, so live decisions
+ * keep learning from a clean baseline instead of averaging in behavior nothing here still
+ * does. Older rows are never deleted -- they stay queryable for historical analysis, just
+ * excluded from what actively drives the game.
+ *
+ * Generation 2 (2026-08-25): the reportAgentOutcome race that left ~40% of decisions stuck
+ * at "unknown" forever got fixed (see GameWorld.ts's own comment on it), priorityAction's
+ * option order and memory-summary wording changed, and the learning-phase timeout was
+ * raised -- all in the same pass, all changing what a decision recorded before this point
+ * actually represents compared to one recorded after. */
+export const CURRENT_GENERATION = 2;
+
 let db: Database.Database | null = null;
 
 /** The repo's first schema migration path: CREATE TABLE IF NOT EXISTS alone can't add a
@@ -73,6 +89,9 @@ function getDb(): Database.Database {
   // is its real replacement: the same detection, recorded instead of acted on.
   ensureColumn(db, "decisions", "overridden", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "decisions", "disagrees_with_memory", "INTEGER NOT NULL DEFAULT 0");
+  // Existing rows default to 1 -- see CURRENT_GENERATION's own comment. Everything on disk
+  // before this column existed predates every generation-2 change by definition.
+  ensureColumn(db, "decisions", "generation", "INTEGER NOT NULL DEFAULT 1");
   return db;
 }
 
@@ -115,10 +134,10 @@ export function recordDecision(record: DecisionRecord): number | null {
   try {
     const result = getDb()
       .prepare(
-        `INSERT INTO decisions (run_id, decision_type, backend, model, choice, fallback, outcome, latency_ms, context_key, context_key_general, disagrees_with_memory)
-         VALUES (@runId, @decisionType, @backend, @model, @choice, @fallback, @outcome, @latencyMs, @contextKey, @contextKeyGeneral, @disagreesWithMemory)`,
+        `INSERT INTO decisions (run_id, decision_type, backend, model, choice, fallback, outcome, latency_ms, context_key, context_key_general, disagrees_with_memory, generation)
+         VALUES (@runId, @decisionType, @backend, @model, @choice, @fallback, @outcome, @latencyMs, @contextKey, @contextKeyGeneral, @disagreesWithMemory, @generation)`,
       )
-      .run({ ...record, fallback: record.fallback ? 1 : 0, disagreesWithMemory: record.disagreesWithMemory ? 1 : 0 });
+      .run({ ...record, fallback: record.fallback ? 1 : 0, disagreesWithMemory: record.disagreesWithMemory ? 1 : 0, generation: CURRENT_GENERATION });
     return Number(result.lastInsertRowid);
   } catch (error) {
     console.error(JSON.stringify({ event: "agent_history_write_failed", error: String(error) }));
@@ -156,13 +175,18 @@ export interface MemoryEntry {
  * indexed key columns to match against, see getMemory. */
 function queryOutcomeCounts(column: "context_key" | "context_key_general", key: string): Map<string, { success: number; failure: number }> {
   const byChoice = new Map<string, { success: number; failure: number }>();
+  // generation = CURRENT_GENERATION, not just "the latest" -- see its own comment. Live
+  // decision-making should never average in behavior from before a change that made the
+  // recorded numbers mean something different (a fixed outcome-reporting bug, a reordered
+  // prompt). Older rows stay on disk for historical reads, just excluded from what
+  // actually informs a real decision.
   const rows = getDb()
     .prepare(
       `SELECT choice, outcome, COUNT(*) as count FROM decisions
-       WHERE ${column} = @key AND outcome != 'unknown' AND choice IS NOT NULL
+       WHERE ${column} = @key AND outcome != 'unknown' AND choice IS NOT NULL AND generation = @generation
        GROUP BY choice, outcome`,
     )
-    .all({ key }) as Array<{ choice: string; outcome: string; count: number }>;
+    .all({ key, generation: CURRENT_GENERATION }) as Array<{ choice: string; outcome: string; count: number }>;
   for (const row of rows) {
     const bucket = byChoice.get(row.choice) ?? { success: 0, failure: 0 };
     if (row.outcome === "enemy_defeated" || row.outcome === "avoided") bucket.success += row.count;
@@ -275,19 +299,26 @@ export interface BackendModelStats {
   timeline: Array<{ runId: string; won: boolean; startedAt: string; seconds: number | null }>;
 }
 
-export function getStats(): { totalDecisions: number; byBackendModel: BackendModelStats[] } {
+export function getStats(): { totalDecisions: number; legacyDecisions: number; byBackendModel: BackendModelStats[] } {
   // Same best-effort discipline as recordDecision above: a read failure
   // here must return an empty stats shape, never crash the dev server.
   let rows: Array<{ backend: string; model: string; runId: string; decisionType: string; choice: string | null; fallback: number; disagreesWithMemory: number; outcome: string; latencyMs: number; createdAt: string }>;
+  let legacyDecisions = 0;
   try {
+    // Scoped to CURRENT_GENERATION, same reasoning as queryOutcomeCounts -- a stats page
+    // (or leaderboard, or a future report) mixing pre-fix and post-fix decisions would
+    // look exactly as lopsided as before even though the live system no longer behaves
+    // that way. legacyDecisions below keeps that history visible rather than silently
+    // hiding it, just not blended into "how is the game doing right now."
     rows = getDb()
       .prepare(
-        `SELECT backend, model, run_id as runId, decision_type as decisionType, choice, fallback, disagrees_with_memory as disagreesWithMemory, outcome, latency_ms as latencyMs, created_at as createdAt FROM decisions`,
+        `SELECT backend, model, run_id as runId, decision_type as decisionType, choice, fallback, disagrees_with_memory as disagreesWithMemory, outcome, latency_ms as latencyMs, created_at as createdAt FROM decisions WHERE generation = @generation`,
       )
-      .all() as typeof rows;
+      .all({ generation: CURRENT_GENERATION }) as typeof rows;
+    legacyDecisions = (getDb().prepare(`SELECT COUNT(*) as c FROM decisions WHERE generation != @generation`).get({ generation: CURRENT_GENERATION }) as { c: number }).c;
   } catch (error) {
     console.error(JSON.stringify({ event: "agent_history_read_failed", error: String(error) }));
-    return { totalDecisions: 0, byBackendModel: [] };
+    return { totalDecisions: 0, legacyDecisions: 0, byBackendModel: [] };
   }
 
   // Every completed run (win only -- see recordRunCompletion's own comment on why losses
@@ -377,5 +408,5 @@ export function getStats(): { totalDecisions: number; byBackendModel: BackendMod
     };
   });
 
-  return { totalDecisions: rows.length, byBackendModel };
+  return { totalDecisions: rows.length, legacyDecisions, byBackendModel };
 }

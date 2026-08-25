@@ -29,6 +29,11 @@ interface BackendModelStats {
 
 interface StatsResponse {
   totalDecisions: number;
+  /** Decisions recorded before the current generation (see history.ts's
+   * CURRENT_GENERATION) -- excluded from everything above since a fixed outcome-reporting
+   * bug and a reworked prompt mean those numbers aren't a fair comparison to today's, but
+   * still real history worth showing rather than hiding. */
+  legacyDecisions: number;
   byBackendModel: BackendModelStats[];
 }
 
@@ -188,6 +193,11 @@ export default function StatsPage() {
         <h1>Agent Stats</h1>
         <p>Every recorded decision and run, straight from the same database the agents actually learn from.</p>
         {data && <p className="stats-total">{data.totalDecisions.toLocaleString()} decisions recorded across {models.length} model{models.length === 1 ? "" : "s"}.</p>}
+        {data && data.legacyDecisions > 0 && (
+          <p className="stats-legacy-note" title="A fixed outcome-reporting bug and a reworked priorityAction prompt mean older decisions aren't a fair comparison to today's -- they're kept, just kept separate.">
+            + {data.legacyDecisions.toLocaleString()} earlier decisions from before the current generation, kept but not counted above.
+          </p>
+        )}
       </header>
 
       {error && <p className="stats-error">Couldn't load stats: {error}</p>}

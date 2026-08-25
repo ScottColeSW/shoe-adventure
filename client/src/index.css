@@ -2152,6 +2152,7 @@ kbd {
 }
 
 .stats-total { color: #ffcf63 !important; }
+.stats-legacy-note { color: rgba(255, 245, 221, 0.5); font-size: 0.85em; cursor: help; }
 
 .stats-error { color: #ff8a7a; max-width: 72rem; margin: 0 auto; }
 .stats-loading { color: rgba(255, 245, 221, 0.6); max-width: 72rem; margin: 0 auto; }
