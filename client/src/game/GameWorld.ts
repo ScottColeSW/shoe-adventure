@@ -426,8 +426,12 @@ const AGENT_STALL_DISTANCE = 0.6;
 /** How long steerByGoal will keep chasing the exact same sticky pickup/enemy target
  * before giving up on it -- see its own comment on the "roughly overhead, nothing to
  * jump onto or drop through" gap this covers, which the x-distance stall watchdog
- * couldn't reliably catch (real if fruitless pacing keeps resetting its distance check). */
-const AGENT_TARGET_CHASE_TIMEOUT = 12;
+ * couldn't reliably catch (real if fruitless pacing keeps resetting its distance check).
+ * A legitimate chase (walk, one or two jumps) normally resolves in a few seconds -- 12s
+ * was set conservatively-safe rather than tuned, and reads as a long visible pause for
+ * anyone watching. 7s still covers a genuinely multi-platform climb without leaving the
+ * original 130+-second failure mode anywhere near this much room to reproduce. */
+const AGENT_TARGET_CHASE_TIMEOUT = 7;
 /** How much closer a new pickup/enemy candidate has to be than the currently-targeted one
  * before steerByGoal actually switches -- see its own comment on the jitter this prevents. */
 const STEER_RETARGET_MARGIN = 1.5;
