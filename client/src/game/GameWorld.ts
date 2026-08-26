@@ -432,6 +432,11 @@ const AGENT_STALL_DISTANCE = 0.6;
  * anyone watching. 7s still covers a genuinely multi-platform climb without leaving the
  * original 130+-second failure mode anywhere near this much room to reproduce. */
 const AGENT_TARGET_CHASE_TIMEOUT = 7;
+/** How long a chase-timed-out pickup/enemy stays blacklisted from re-selection -- see
+ * agentAbandonedPickup/agentAbandonedEnemy. Comfortably longer than one requestAgentGoal
+ * cadence (~1.6s+ real latency) so the very next call can't just re-target the same thing;
+ * short enough that a genuine return trip later in the level isn't blocked forever. */
+const AGENT_ABANDON_COOLDOWN = 15;
 /** How much closer a new pickup/enemy candidate has to be than the currently-targeted one
  * before steerByGoal actually switches -- see its own comment on the jitter this prevents. */
 const STEER_RETARGET_MARGIN = 1.5;
@@ -580,6 +585,16 @@ export class GameWorld {
   /** How long the current sticky target has gone uncollected -- see steerByGoal's own
    * comment on AGENT_TARGET_CHASE_TIMEOUT. Reset whenever the target itself changes. */
   private agentTargetChaseTimer = 0;
+  /** Live-observed: abandoning a chase-timed-out target didn't actually rotate anything --
+   * nothing about the world changed, so the very next requestAgentGoal call saw the exact
+   * same nearest pickup/enemy and picked it right back, re-triggering the identical stall
+   * on a loop. A short blacklist on the specific object (not the whole category) makes
+   * "pick a new priority" actually mean a *different* target instead of re-latching onto
+   * the one that just failed; it expires so a legitimate return trip isn't permanent. */
+  private agentAbandonedPickup: Pickup | null = null;
+  private agentAbandonedPickupCooldown = 0;
+  private agentAbandonedEnemy: Enemy | null = null;
+  private agentAbandonedEnemyCooldown = 0;
   /** Counts down to the next requestAgentGoal() call -- reset only once the previous
    * call resolves (success or fallback), never on a fixed wall-clock schedule, so cadence
    * naturally adapts to real model latency instead of stacking calls behind a slow one. */
@@ -2413,6 +2428,10 @@ export class GameWorld {
     this.repeatedJumpAttempts = 0;
     this.lastReactiveJumpX = this.player.x;
     this.agentTargetChaseTimer = 0;
+    this.agentAbandonedPickup = null;
+    this.agentAbandonedPickupCooldown = 0;
+    this.agentAbandonedEnemy = null;
+    this.agentAbandonedEnemyCooldown = 0;
     this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
     this.message = "AGENT RUN: " + this.superRunAction;
     this.setAgentActivity("advancing", "STARTING RUN");
@@ -3364,6 +3383,10 @@ export class GameWorld {
    * design (resolution-driven, not wall-clock). */
   private tickAgentGoal(delta: number) {
     this.agentGoalTimer = Math.max(0, this.agentGoalTimer - delta);
+    this.agentAbandonedPickupCooldown = Math.max(0, this.agentAbandonedPickupCooldown - delta);
+    if (this.agentAbandonedPickupCooldown <= 0) this.agentAbandonedPickup = null;
+    this.agentAbandonedEnemyCooldown = Math.max(0, this.agentAbandonedEnemyCooldown - delta);
+    if (this.agentAbandonedEnemyCooldown <= 0) this.agentAbandonedEnemy = null;
     // A newly-visible pickup or enemy shortens the wait rather than force-firing a
     // request immediately -- keeps a burst of new entities from spamming calls while
     // still reacting sooner than the full resolution-driven gap would otherwise allow.
@@ -3416,7 +3439,7 @@ export class GameWorld {
       if (this.player.ultraMove && this.player.ultraCooldown <= 0) this.tryUltraMove();
       this.agentGoal = "advance";
     } else if (this.agentGoal === "collect_pickup") {
-      const candidates = this.pickups.filter((p) => !p.collected);
+      const candidates = this.pickups.filter((p) => !p.collected && p !== this.agentAbandonedPickup);
       const nearest = candidates.slice().sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))[0];
       // Sticky targeting, not "nearest" recomputed fresh every frame -- live-observed bug:
       // two pickups sitting at a similar distance on opposite sides of the player made
@@ -3444,6 +3467,8 @@ export class GameWorld {
         if (this.agentTargetChaseTimer > AGENT_TARGET_CHASE_TIMEOUT) {
           this.agentPickupTarget = null;
           this.agentTargetChaseTimer = 0;
+          this.agentAbandonedPickup = target;
+          this.agentAbandonedPickupCooldown = AGENT_ABANDON_COOLDOWN;
           this.agentGoalTimer = Math.min(this.agentGoalTimer, 0.4);
           this.logAgent(`⚠ gave up on ${target.kind} after ${AGENT_TARGET_CHASE_TIMEOUT}s -- picking a new priority`);
         }
@@ -3459,7 +3484,7 @@ export class GameWorld {
         this.held.left = Boolean(target) && target.x < this.player.x;
       }
     } else if (this.agentGoal === "engage_enemy") {
-      const candidates = this.enemies.filter((e) => e.alive);
+      const candidates = this.enemies.filter((e) => e.alive && e !== this.agentAbandonedEnemy);
       const nearest = candidates.slice().sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))[0];
       // Same sticky-targeting fix as collect_pickup above, same reasoning.
       const sticky = this.agentEnemyTarget && candidates.includes(this.agentEnemyTarget) ? this.agentEnemyTarget : null;
@@ -3471,6 +3496,8 @@ export class GameWorld {
         if (this.agentTargetChaseTimer > AGENT_TARGET_CHASE_TIMEOUT) {
           this.agentEnemyTarget = null;
           this.agentTargetChaseTimer = 0;
+          this.agentAbandonedEnemy = target;
+          this.agentAbandonedEnemyCooldown = AGENT_ABANDON_COOLDOWN;
           this.agentGoalTimer = Math.min(this.agentGoalTimer, 0.4);
           this.logAgent(`⚠ gave up chasing ${target.kind} after ${AGENT_TARGET_CHASE_TIMEOUT}s -- picking a new priority`);
         }
@@ -3529,12 +3556,12 @@ export class GameWorld {
     // reachability without ever being told the vertical gap in the first place -- distance
     // alone said nothing about it being directly ahead versus six units straight up.
     const nearbyPickups = this.pickups
-      .filter((p) => !p.collected && p.x - this.player.x > -2 && p.x - this.player.x < lookahead)
+      .filter((p) => !p.collected && p !== this.agentAbandonedPickup && p.x - this.player.x > -2 && p.x - this.player.x < lookahead)
       .sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))
       .slice(0, 3)
       .map((p) => ({ kind: p.kind, distance: Number((p.x - this.player.x).toFixed(2)), height: Number((p.y - this.player.bottom).toFixed(2)) }));
     const nearbyEnemies = this.enemies
-      .filter((e) => e.alive && e.x - this.player.x > -2 && e.x - this.player.x < lookahead)
+      .filter((e) => e.alive && e !== this.agentAbandonedEnemy && e.x - this.player.x > -2 && e.x - this.player.x < lookahead)
       .sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))
       .slice(0, 3)
       .map((e) => ({ kind: e.kind, bossTier: e.bossTier ?? null, distance: Number((e.x - this.player.x).toFixed(2)), height: Number((e.bottom - this.player.bottom).toFixed(2)) }));
