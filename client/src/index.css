@@ -353,8 +353,8 @@ button:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: clamp(2rem, 7vw, 6rem);
-  width: min(94vw, 68rem);
+  gap: clamp(1.6rem, 5vw, 4rem);
+  width: min(78vw, 52rem);
   height: 4.4rem;
   padding: 0 0.4rem;
   /* Deliberately not overflow-x:auto -- CSS coerces a "visible" opposite axis to auto
@@ -521,7 +521,6 @@ button:focus-visible {
   right: 1rem;
   transform: translateY(-50%);
   width: min(19rem, 26vw);
-  max-height: 40vh;
   display: flex;
   flex-direction: column;
   border: 1px dashed rgba(255, 224, 144, 0.5);
@@ -544,7 +543,9 @@ button:focus-visible {
 .agent-log-header em { overflow: hidden; color: #9be8ff; font-size: 0.667rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .agent-log-body {
-  overflow-y: auto;
+  /* No overflow/scroll needed -- GameWorld.ts's logAgent() hard-caps at 20 entries, so
+   * this panel's height is naturally bounded by its own content now instead of needing a
+   * fixed max-height + scrollbar as a safety net against unbounded growth. */
   padding: 0.4rem 0.55rem;
   font-family: "DM Mono", monospace;
 }

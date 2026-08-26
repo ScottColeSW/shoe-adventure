@@ -72,8 +72,16 @@ export interface PriorityActionState {
      * jump is imminent helps the model judge whether "engage_enemy" is even safe right now. */
     grounded: boolean;
   };
-  nearbyPickups: { kind: string; distance: number }[];
-  nearbyEnemies: { kind: string; bossTier: "mini" | "boss" | null; distance: number }[];
+  /** height: how far above (positive) or below (negative) the player this sits -- distance
+   * alone couldn't distinguish "directly ahead on the same ground" from "six units
+   * straight up," which is exactly what a model needs to judge whether collect_pickup is
+   * actually a reasonable call here versus something the engine's own jump/drop reflexes
+   * would have to fight to reach (see GameWorld.ts's updateAgentRun -- it now suppresses
+   * the reactive jump and shortens the drop-through grace window when the current sticky
+   * target sits below the player, but it can't do anything about a target genuinely out
+   * of jump range above; the model choosing something else instead is the real fix there). */
+  nearbyPickups: { kind: string; distance: number; height: number }[];
+  nearbyEnemies: { kind: string; bossTier: "mini" | "boss" | null; distance: number; height: number }[];
   /** What's coming up along the route -- a "gap" (a jump the engine will handle
    * automatically but that makes the terrain harder), a bounce pad, or a crumble
    * platform. Lets the model reason about "is the ground ahead safe" rather than judging

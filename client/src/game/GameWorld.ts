@@ -287,8 +287,9 @@ export interface UiSnapshot {
    * see setAgentActivity(). superRunAction/message are kept for accessibility text only. */
   agentActivity: AgentActivity;
   agentActivityTarget?: string;
-  /** Scrolling spectator-facing log of real agent decision calls and their outcomes --
-   * see GameWorld.logAgent(). Oldest first, capped to the most recent 24 entries. */
+  /** Spectator-facing log of real agent decision calls and their outcomes -- see
+   * GameWorld.logAgent(). Oldest first, capped to the most recent 20 entries so the panel
+   * itself never needs to scroll (see its own CSS -- fixed to fit exactly this many). */
   agentLog: string[];
   /** Real-vs-scripted tally for this run only (reset in startAgentRun) -- see
    * agentRealAnswers/agentScriptedAnswers' own comment for what counts as which. */
@@ -768,7 +769,19 @@ export class GameWorld {
     // ?model/?autoRepeat (see startAutoRepeat), the batch resumes itself on the other
     // side with no one watching -- the whole point of an unattended bulk-testing run.
     this.scene.getEngine().onContextLostObservable.add(() => {
-      window.setTimeout(() => window.location.reload(), 500);
+      window.setTimeout(() => {
+        // Live-reported: over a long unattended batch, this self-heal reload sometimes
+        // landed on a stale cached bundle referencing an already-defunct dev-server build
+        // (an old chunk hash from before a prior restart) instead of the current one --
+        // the game looked like it had "no board" again even though the actual server was
+        // fine, only reproducing through this reload path specifically. A plain
+        // location.reload() can still be served from HTTP cache depending on how the dev
+        // server's cache-control headers land; forcing a genuinely new URL (a cache-bust
+        // query param, not just "reload") makes this a real network fetch instead.
+        const url = new URL(window.location.href);
+        url.searchParams.set("_cb", Date.now().toString(36));
+        window.location.href = url.toString();
+      }, 500);
     });
 
     this.scene.onBeforeRenderObservable.add(() => {
@@ -3222,7 +3235,22 @@ export class GameWorld {
         platform.x - platform.width / 2 - this.player.x < 2.35 &&
         platform.top > this.player.bottom + 0.18,
     );
-    if (this.player.grounded && platformAhead) {
+    // Whether the current sticky goal target sits meaningfully below the player -- if so,
+    // the reactive jump below only climbs further away from it, and dropping through the
+    // current platform (see the drop-through block further down) is the actual way to
+    // make progress, even if something else is still technically "ahead" to jump onto.
+    // Live-reported: chasing a pickup sitting below the player looked like the agent
+    // "doesn't understand it can go down", because the jump reflex kept firing on
+    // whatever unrelated platform was ahead regardless of which way the real target was.
+    const targetY =
+      this.agentGoal === "collect_pickup" && this.agentPickupTarget
+        ? this.agentPickupTarget.y
+        : this.agentGoal === "engage_enemy" && this.agentEnemyTarget
+          ? this.agentEnemyTarget.bottom
+          : null;
+    const targetIsBelow = targetY != null && targetY < this.player.bottom - 1.2;
+
+    if (this.player.grounded && platformAhead && !targetIsBelow) {
       // Live-reported bug: a jump that falls just short of clearing the gap lands the
       // player back where they started -- still grounded, platformAhead still true --
       // so this refires and repeats the exact same jump, over and over, with no net
@@ -3261,9 +3289,11 @@ export class GameWorld {
     // eventually fall off it naturally anyway; this just doesn't make the agent wait that
     // long once there's genuinely nothing left to do up here. The stall-only version of
     // this (checkAgentStall) predates it and stays as a backstop for whatever this misses.
-    if (this.player.grounded && !platformAhead && this.player.bottom > AGENT_DROP_THROUGH_MIN_HEIGHT) {
+    // targetIsBelow shortens the grace window drastically (0.4s, not 1.5s) and fires even
+    // if something else is technically still "ahead" -- see its own comment above.
+    if (this.player.grounded && (targetIsBelow || !platformAhead) && this.player.bottom > AGENT_DROP_THROUGH_MIN_HEIGHT) {
       this.noPlatformAheadTimer += delta;
-      if (this.noPlatformAheadTimer > 1.5) {
+      if (this.noPlatformAheadTimer > (targetIsBelow ? 0.4 : 1.5)) {
         this.tryDropThrough();
         this.noPlatformAheadTimer = 0;
       }
@@ -3449,16 +3479,22 @@ export class GameWorld {
     this.publishUi(true);
 
     const lookahead = 9;
+    // height (not just horizontal distance) -- live-reported: the model kept choosing
+    // collect_pickup for things sitting far above or below it, with the engine left to
+    // solve the resulting climb/drop entirely on its own via reflexes (see the reactive
+    // jump/drop-through blocks in updateAgentRun). It couldn't reasonably have judged
+    // reachability without ever being told the vertical gap in the first place -- distance
+    // alone said nothing about it being directly ahead versus six units straight up.
     const nearbyPickups = this.pickups
       .filter((p) => !p.collected && p.x - this.player.x > -2 && p.x - this.player.x < lookahead)
       .sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))
       .slice(0, 3)
-      .map((p) => ({ kind: p.kind, distance: Number((p.x - this.player.x).toFixed(2)) }));
+      .map((p) => ({ kind: p.kind, distance: Number((p.x - this.player.x).toFixed(2)), height: Number((p.y - this.player.bottom).toFixed(2)) }));
     const nearbyEnemies = this.enemies
       .filter((e) => e.alive && e.x - this.player.x > -2 && e.x - this.player.x < lookahead)
       .sort((a, b) => Math.abs(a.x - this.player.x) - Math.abs(b.x - this.player.x))
       .slice(0, 3)
-      .map((e) => ({ kind: e.kind, bossTier: e.bossTier ?? null, distance: Number((e.x - this.player.x).toFixed(2)) }));
+      .map((e) => ({ kind: e.kind, bossTier: e.bossTier ?? null, distance: Number((e.x - this.player.x).toFixed(2)), height: Number((e.bottom - this.player.bottom).toFixed(2)) }));
     const nearbyTerrain = this.buildNearbyTerrain(lookahead);
 
     const state = {
@@ -3922,11 +3958,12 @@ export class GameWorld {
     this.cameraZoomTimer = duration;
   }
 
-  /** Appends one line to the scrolling agent-call log (UiSnapshot.agentLog), capped to
-   * the most recent 24 entries so the HUD panel never grows unbounded across a long run. */
+  /** Appends one line to the agent-call log (UiSnapshot.agentLog), capped to the most
+   * recent 20 entries -- both so the HUD panel never grows unbounded across a long run,
+   * and so it fits its fixed-height panel without needing to scroll (see its own CSS). */
   private logAgent(text: string) {
     this.agentLog.push(`${this.titleTime.toFixed(1)}s  ${text}`);
-    if (this.agentLog.length > 24) this.agentLog.shift();
+    if (this.agentLog.length > 20) this.agentLog.shift();
   }
 
   /** Cheap keyword classification so the ~24 existing milestone call sites in

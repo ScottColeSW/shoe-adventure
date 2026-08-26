@@ -256,13 +256,25 @@ function parseEnemyResponseChoice(raw: string | null): EnemyResponseChoice | nul
   return (ENEMY_RESPONSE_OPTIONS as readonly string[]).find((option) => normalized.includes(option)) as EnemyResponseChoice | null | undefined ?? null;
 }
 
+// A number alone ("2.3") doesn't say whether that's level ground or a climb -- see
+// PriorityActionState.nearbyPickups' own comment on why this exists. Rounds off anything
+// under half a unit as "same height" rather than a distracting near-zero decimal; real
+// gaps get called out as "above"/"below" so the model can judge reachability itself
+// (roughly what tryJump can clear is ~1.5 units, but this deliberately doesn't hardcode
+// that threshold into the text -- the model reasoning about "how far is too far" is the
+// point, not another number to blindly defer to).
+function describeHeight(height: number): string {
+  if (Math.abs(height) < 0.5) return "same height";
+  return `${Math.abs(height).toFixed(1)} units ${height > 0 ? "above" : "below"}`;
+}
+
 function buildPriorityActionPrompt(request: DecisionRequest, memoryLine: string): string {
   const { player, nearbyPickups, nearbyEnemies, nearbyTerrain, nextObjective } = request.state as PriorityActionState;
   const pickups = nearbyPickups.length
-    ? nearbyPickups.map((p) => `${p.kind} (${p.distance.toFixed(1)} units ${p.distance >= 0 ? "ahead" : "behind"})`).join(", ")
+    ? nearbyPickups.map((p) => `${p.kind} (${p.distance.toFixed(1)} units ${p.distance >= 0 ? "ahead" : "behind"}, ${describeHeight(p.height)})`).join(", ")
     : "none nearby";
   const enemies = nearbyEnemies.length
-    ? nearbyEnemies.map((e) => `${e.bossTier ? `${e.bossTier}-boss ` : ""}${e.kind} (${e.distance.toFixed(1)} units ${e.distance >= 0 ? "ahead" : "behind"})`).join(", ")
+    ? nearbyEnemies.map((e) => `${e.bossTier ? `${e.bossTier}-boss ` : ""}${e.kind} (${e.distance.toFixed(1)} units ${e.distance >= 0 ? "ahead" : "behind"}, ${describeHeight(e.height)})`).join(", ")
     : "none nearby";
   const terrainLabel: Record<PriorityActionState["nearbyTerrain"][number]["kind"], string> = {
     gap: "a gap that needs a jump",
@@ -279,6 +291,7 @@ function buildPriorityActionPrompt(request: DecisionRequest, memoryLine: string)
     `Right Shoe has ${player.hearts}/${player.maxHearts} hearts and is in ${player.shoeForm} form, currently ${player.grounded ? "standing on solid ground" : "airborne"}.`,
     `Nearby pickups: ${pickups}.`,
     `Nearby enemies: ${enemies}.`,
+    "A single jump clears roughly 1.5 units of height -- something listed as several units above or below likely needs a real detour to actually reach, not a straight line toward it.",
     `Terrain ahead: ${terrain}. Jump timing is automatic -- you don't need to time jumps yourself, just judge whether the terrain ahead makes advancing, fighting, or dashing the safer call.`,
     `The level exit marker (or Left Shoe, on the final level) is ${nextObjective.distance.toFixed(1)} units ahead.`,
     memoryLine || null,
