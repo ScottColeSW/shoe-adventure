@@ -423,6 +423,11 @@ const ENEMY_LEASH = 2.5;
 /** Agent-run stall watchdog thresholds -- see checkAgentStall(). */
 const AGENT_STALL_TIMEOUT = 9;
 const AGENT_STALL_DISTANCE = 0.6;
+/** How long steerByGoal will keep chasing the exact same sticky pickup/enemy target
+ * before giving up on it -- see its own comment on the "roughly overhead, nothing to
+ * jump onto or drop through" gap this covers, which the x-distance stall watchdog
+ * couldn't reliably catch (real if fruitless pacing keeps resetting its distance check). */
+const AGENT_TARGET_CHASE_TIMEOUT = 12;
 /** How much closer a new pickup/enemy candidate has to be than the currently-targeted one
  * before steerByGoal actually switches -- see its own comment on the jitter this prevents. */
 const STEER_RETARGET_MARGIN = 1.5;
@@ -568,6 +573,9 @@ export class GameWorld {
    * candidates, making no net progress until the stall watchdog eventually intervened). */
   private agentPickupTarget: Pickup | null = null;
   private agentEnemyTarget: Enemy | null = null;
+  /** How long the current sticky target has gone uncollected -- see steerByGoal's own
+   * comment on AGENT_TARGET_CHASE_TIMEOUT. Reset whenever the target itself changes. */
+  private agentTargetChaseTimer = 0;
   /** Counts down to the next requestAgentGoal() call -- reset only once the previous
    * call resolves (success or fallback), never on a fixed wall-clock schedule, so cadence
    * naturally adapts to real model latency instead of stacking calls behind a slow one. */
@@ -2400,6 +2408,7 @@ export class GameWorld {
     this.agentScriptedAnswers = 0;
     this.repeatedJumpAttempts = 0;
     this.lastReactiveJumpX = this.player.x;
+    this.agentTargetChaseTimer = 0;
     this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
     this.message = "AGENT RUN: " + this.superRunAction;
     this.setAgentActivity("advancing", "STARTING RUN");
@@ -3359,7 +3368,7 @@ export class GameWorld {
     this.agentLastNearbyCount = nearbyCount;
 
     if (this.agentGoalTimer <= 0 && !this.agentGoalPending) this.requestAgentGoal();
-    this.steerByGoal();
+    this.steerByGoal(delta);
   }
 
   private countNearbyForAgent(): number {
@@ -3395,7 +3404,7 @@ export class GameWorld {
    * instant-ability goals, an immediate action. The engine still decides *which*
    * specific pickup/enemy is nearest and *when* to jump -- the model only picked the
    * category (see requestAgentGoal's PriorityActionState). */
-  private steerByGoal() {
+  private steerByGoal(delta: number) {
     if (this.agentGoal === "use_dash") {
       if (this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
       this.agentGoal = "advance";
@@ -3414,7 +3423,27 @@ export class GameWorld {
       // or something is genuinely (not marginally) closer.
       const sticky = this.agentPickupTarget && candidates.includes(this.agentPickupTarget) ? this.agentPickupTarget : null;
       const target = sticky && (!nearest || Math.abs(sticky.x - this.player.x) <= Math.abs(nearest.x - this.player.x) + STEER_RETARGET_MARGIN) ? sticky : nearest;
+      if (target !== this.agentPickupTarget) this.agentTargetChaseTimer = 0;
       this.agentPickupTarget = target ?? null;
+      // Live-reported: a pickup sitting roughly overhead on a wide platform (needs a
+      // mostly-vertical jump, not a walk) tripped neither the reactive jump (nothing
+      // genuinely *ahead*) nor drop-through (not elevated enough to trigger it) -- the
+      // player just paced under it for 130+ real seconds before an unrelated enemy
+      // wandering into range finally gave it a reason to change goals. Rather than wait on
+      // that, or on the x-distance stall watchdog (which real, if fruitless, pacing keeps
+      // resetting), directly time how long the *same* target has gone uncollected and let
+      // go once it's clearly not working -- lets the model's next goal call pick a fresh
+      // priority instead of re-committing to the one that just failed (the user's own
+      // framing: rotate priority, don't grind one that isn't working).
+      if (target) {
+        this.agentTargetChaseTimer += delta;
+        if (this.agentTargetChaseTimer > AGENT_TARGET_CHASE_TIMEOUT) {
+          this.agentPickupTarget = null;
+          this.agentTargetChaseTimer = 0;
+          this.agentGoalTimer = Math.min(this.agentGoalTimer, 0.4);
+          this.logAgent(`⚠ gave up on ${target.kind} after ${AGENT_TARGET_CHASE_TIMEOUT}s -- picking a new priority`);
+        }
+      }
       // Live-tested: "collect_pickup" chasing something several units behind the player
       // directly fights "reach the screen exit" -- the actual win condition per screen --
       // with nothing to arbitrate between them. A pickup barely behind (already all but
@@ -3431,7 +3460,17 @@ export class GameWorld {
       // Same sticky-targeting fix as collect_pickup above, same reasoning.
       const sticky = this.agentEnemyTarget && candidates.includes(this.agentEnemyTarget) ? this.agentEnemyTarget : null;
       const target = sticky && (!nearest || Math.abs(sticky.x - this.player.x) <= Math.abs(nearest.x - this.player.x) + STEER_RETARGET_MARGIN) ? sticky : nearest;
+      if (target !== this.agentEnemyTarget) this.agentTargetChaseTimer = 0;
       this.agentEnemyTarget = target ?? null;
+      if (target) {
+        this.agentTargetChaseTimer += delta;
+        if (this.agentTargetChaseTimer > AGENT_TARGET_CHASE_TIMEOUT) {
+          this.agentEnemyTarget = null;
+          this.agentTargetChaseTimer = 0;
+          this.agentGoalTimer = Math.min(this.agentGoalTimer, 0.4);
+          this.logAgent(`⚠ gave up chasing ${target.kind} after ${AGENT_TARGET_CHASE_TIMEOUT}s -- picking a new priority`);
+        }
+      }
       if (target && target.x < this.player.x - 2.5) this.steerTowardObjective();
       else {
         this.held.right = !target || target.x >= this.player.x;
