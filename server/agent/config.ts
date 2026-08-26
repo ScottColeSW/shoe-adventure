@@ -48,6 +48,13 @@ export const agentConfig = {
    * 1500ms, which real qwen2.5:3b calls started missing by a hair once the timeout had
    * tightened onto it -- raised for real margin. */
   decisionMinTimeoutMs: Number(process.env.SHOE_DECISION_MIN_TIMEOUT_MS) || 3000,
+  /** Consecutive fallbacks (most recent first) for one backend+model that count as "clearly
+   * stuck, not just unlucky" -- see history.ts's hasRecentFallbackStreak. Small on purpose:
+   * a genuinely broken/unreachable model shouldn't get the full generous ceiling forever
+   * (that's the exact deadlock decisionTimeoutMs's own comment describes for gemma4:26b),
+   * just enough consecutive misses to distinguish "the model that unloaded needs one real
+   * cold-reload attempt" from ordinary jitter around the tightened timeout. */
+  decisionFallbackStreakToWiden: Number(process.env.SHOE_DECISION_FALLBACK_STREAK) || 3,
   // fileURLToPath, not new URL(...).pathname: a URL pathname on Windows
   // keeps a leading slash before the drive letter ("/H:/pet_projects/..."),
   // which better-sqlite3's underlying SQLite open call rejects outright

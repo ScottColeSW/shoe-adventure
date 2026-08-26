@@ -304,6 +304,29 @@ export function getLatencyProfile(backend: string, model: string): LatencyProfil
   return { p90LatencyMs: rows[index].latencyMs, samples: rows.length };
 }
 
+/** Live-observed deadlock: getLatencyProfile only ever looks at past successful calls, with
+ * no recency window -- so once a model that had built up a fast, tightened timeout gets
+ * evicted from Ollama for any reason (VRAM pressure, an explicit stop, anything short of
+ * the request's own keep_alive expiring), every subsequent call is a real cold reload
+ * (~12.5s observed, see ollama.ts's keep_alive comment) racing a timeout tightened around
+ * old in-memory latency (as low as the 3s floor) -- a race it can never win, and one that
+ * can never produce a fresh success to loosen the timeout back up either. Same shape as the
+ * gemma4:26b deadlock config.ts's decisionTimeoutMs comment already describes, one layer
+ * up: this detects "currently, clearly stuck" so resolveTimeoutMs can grant one generous-
+ * timeout attempt to give a real reload an honest chance to complete and break the loop. */
+export function hasRecentFallbackStreak(backend: string, model: string, streak: number): boolean {
+  let rows: Array<{ fallback: number }>;
+  try {
+    rows = getDb()
+      .prepare(`SELECT fallback FROM decisions WHERE backend = @backend AND model = @model ORDER BY id DESC LIMIT @streak`)
+      .all({ backend, model, streak }) as Array<{ fallback: number }>;
+  } catch (error) {
+    console.error(JSON.stringify({ event: "agent_history_streak_read_failed", error: String(error) }));
+    return false;
+  }
+  return rows.length === streak && rows.every((row) => row.fallback === 1);
+}
+
 export interface BackendModelStats {
   backend: string;
   model: string;

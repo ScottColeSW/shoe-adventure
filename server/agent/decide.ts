@@ -28,7 +28,7 @@ import { OllamaBackend } from "./backends/ollama";
 import { LlamaCppBackend } from "./backends/llamacpp";
 import { HostedApiBackend } from "./backends/hostedApi";
 import { agentConfig } from "./config";
-import { recordDecision, getMemory, getLatencyProfile, type MemoryEntry } from "./history";
+import { recordDecision, getMemory, getLatencyProfile, hasRecentFallbackStreak, type MemoryEntry } from "./history";
 import { getLeaderboard } from "../runs";
 
 const backends: Record<DecisionRequest["backend"], AgentBackend> = {
@@ -93,6 +93,11 @@ const TIME_TRIAL_TIMEOUT_MS = 2200;
 
 function resolveTimeoutMs(backend: string, model: string, timeTrial: boolean): number {
   if (timeTrial) return TIME_TRIAL_TIMEOUT_MS;
+  // A real cold reload (~12.5s observed) can never finish inside a timeout tightened around
+  // old in-memory latency, and a losing race never produces the fresh success that would
+  // loosen it back up -- see hasRecentFallbackStreak's own comment for the full deadlock.
+  // One generous-ceiling attempt here is what breaks it.
+  if (hasRecentFallbackStreak(backend, model, agentConfig.decisionFallbackStreakToWiden)) return agentConfig.decisionTimeoutMs;
   const profile = getLatencyProfile(backend, model);
   if (!profile || profile.samples < agentConfig.decisionLatencySamplesToTighten) return agentConfig.decisionTimeoutMs;
   const tightened = profile.p90LatencyMs * agentConfig.decisionLatencyBuffer;
