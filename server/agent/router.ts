@@ -58,7 +58,7 @@ agentRouter.post("/unload", async (req, res) => {
   res.json(result);
 });
 
-const VALID_OUTCOMES: DecisionRecord["outcome"][] = ["enemy_defeated", "player_damaged", "avoided", "unknown"];
+const VALID_OUTCOMES: DecisionRecord["outcome"][] = ["enemy_defeated", "player_damaged", "avoided", "goal_completed", "goal_abandoned", "unknown"];
 
 /** Closes the loop on a decision's outcome (see history.ts's recordOutcome / getMemory)
  * -- the client calls this shortly after an enemyResponse decision resolves, so the
@@ -68,7 +68,7 @@ agentRouter.post("/decide/:id/outcome", (req, res) => {
   const id = Number(req.params.id);
   const outcome = req.body?.outcome as DecisionRecord["outcome"] | undefined;
   if (!Number.isInteger(id) || !outcome || !VALID_OUTCOMES.includes(outcome)) {
-    res.status(400).json({ error: "a valid decision id and outcome (enemy_defeated | player_damaged | avoided | unknown) are required" });
+    res.status(400).json({ error: "a valid decision id and outcome (enemy_defeated | player_damaged | avoided | goal_completed | goal_abandoned | unknown) are required" });
     return;
   }
   recordOutcome(id, outcome);

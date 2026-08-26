@@ -22,7 +22,15 @@ export interface DecisionRecord {
    * point of watching it get better at reasoning) but the disagreement itself kept as a
    * recorded signal -- worth noting when model and data disagree, not acting on it for them. */
   disagreesWithMemory: boolean;
-  outcome: "enemy_defeated" | "player_damaged" | "avoided" | "unknown";
+  /** goal_completed/goal_abandoned are priorityAction-only -- see GameWorld.ts's
+   * reportDecisionOutcome call sites for what each goal (collect_pickup, engage_enemy,
+   * advance, use_dash, use_ultra) actually measures to tell the two apart. Kept distinct
+   * from enemy_defeated/player_damaged/avoided (enemyResponse's own outcomes) rather than
+   * overloaded onto them: "avoided" in particular used to double as "the goal resolved
+   * fine" *and* "the goal was abandoned after a chase timeout" for priorityAction rows,
+   * which meant a wasted 7-second chase down an unreachable pickup and a genuinely useful
+   * one scored identically in the memory that's supposed to tell them apart. */
+  outcome: "enemy_defeated" | "player_damaged" | "avoided" | "goal_completed" | "goal_abandoned" | "unknown";
   latencyMs: number;
   /** A bucketed signature of the decision-relevant state (see decide.ts's
    * buildContextKey) -- e.g. "enemy:slime:none:heartsmid:starter". This is
@@ -197,8 +205,9 @@ export interface MemoryEntry {
  * an ordinary success -- see markRunWon's own comment for the reasoning. Only applied to
  * already-successful outcomes (enemy_defeated/avoided): a player_damaged decision doesn't
  * get rehabilitated just because the run survived it anyway, it's still locally a hit
- * taken. 3x is a first cut, not a tuned constant -- there isn't enough won-run data yet
- * (generation 2 is brand new) to know the right strength, but the mechanism is what
+ * taken (same for goal_abandoned -- a wasted chase doesn't get credit for a run that won
+ * despite it). 3x is a first cut, not a tuned constant -- there isn't enough won-run data
+ * yet (generation 2 is brand new) to know the right strength, but the mechanism is what
  * matters: this is still the same posterior math every other choice goes through, not a
  * hardcoded priority order in the prompt. */
 const WIN_REWARD_MULTIPLIER = 3;
@@ -221,9 +230,9 @@ function queryOutcomeCounts(column: "context_key" | "context_key_general", key: 
     .all({ key, generation: CURRENT_GENERATION }) as Array<{ choice: string; outcome: string; runWon: number; count: number }>;
   for (const row of rows) {
     const bucket = byChoice.get(row.choice) ?? { success: 0, failure: 0 };
-    if (row.outcome === "enemy_defeated" || row.outcome === "avoided") {
+    if (row.outcome === "enemy_defeated" || row.outcome === "avoided" || row.outcome === "goal_completed") {
       bucket.success += row.count * (row.runWon ? WIN_REWARD_MULTIPLIER : 1);
-    } else if (row.outcome === "player_damaged") {
+    } else if (row.outcome === "player_damaged" || row.outcome === "goal_abandoned") {
       bucket.failure += row.count;
     }
     byChoice.set(row.choice, bucket);

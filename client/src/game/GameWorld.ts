@@ -606,6 +606,11 @@ export class GameWorld {
    * the enemyResponse outcome round trip (agentAskedEnemies/reportAgentOutcome) for the
    * decision type that never had one before. */
   private agentGoalDecisionId: number | null = null;
+  /** player.x at the moment the current agentGoal became active -- the only way to measure
+   * whether "advance" actually achieved anything, since unlike collect_pickup/engage_enemy
+   * it has no discrete completion event of its own to hook (see requestAgentGoal's .then
+   * for where this is read against AGENT_STALL_DISTANCE). */
+  private agentGoalStartX = 0;
   /** Stall watchdog: if the player hasn't advanced by STALL_DISTANCE within
    * STALL_TIMEOUT seconds, updateAgentRun nudges progress deterministically (see
    * checkAgentStall) rather than leaving a free-choosing agent stuck at a gated lane. */
@@ -2389,7 +2394,20 @@ export class GameWorld {
     // not just the ones inside a batch.
     this.flushPendingEnemyOutcomes();
     if (this.agentGoalDecisionId != null) {
-      this.reportDecisionOutcome(this.agentGoalDecisionId, "avoided");
+      if (result === "won") {
+        // Whatever this goal was, being in flight at the exact moment the run won is about
+        // as good an outcome as a priorityAction decision can have -- and markRunWon (called
+        // right after this by recordRunCompletion) will apply the win-reward multiplier on
+        // top of it, same as any other decision from this run.
+        this.reportDecisionOutcome(this.agentGoalDecisionId, "goal_completed");
+      } else if (this.agentGoal === "advance") {
+        const progressed = this.player.x - this.agentGoalStartX > AGENT_STALL_DISTANCE;
+        this.reportDecisionOutcome(this.agentGoalDecisionId, progressed ? "goal_completed" : "goal_abandoned");
+      }
+      // A still-open collect_pickup/engage_enemy at the moment of a loss is genuinely
+      // ambiguous -- same reasoning as requestAgentGoal's own catch-all: left "unknown"
+      // rather than blaming a possibly-innocent decision for a loss it may have had nothing
+      // to do with.
       this.agentGoalDecisionId = null;
     }
     if (!this.autoRepeatActive) return;
@@ -2432,6 +2450,7 @@ export class GameWorld {
     this.agentAbandonedPickupCooldown = 0;
     this.agentAbandonedEnemy = null;
     this.agentAbandonedEnemyCooldown = 0;
+    this.agentGoalStartX = this.player.x;
     this.superRunAction = `AGENT RUN — ${this.agentBackend}/${this.agentModel} is driving Right Shoe.`;
     this.message = "AGENT RUN: " + this.superRunAction;
     this.setAgentActivity("advancing", "STARTING RUN");
@@ -3433,10 +3452,24 @@ export class GameWorld {
    * category (see requestAgentGoal's PriorityActionState). */
   private steerByGoal(delta: number) {
     if (this.agentGoal === "use_dash") {
-      if (this.player.dashCharges > 0 && this.player.dashCooldown <= 0) this.tryDash();
+      const usable = this.player.dashCharges > 0 && this.player.dashCooldown <= 0;
+      if (usable) this.tryDash();
+      // Resolves instantly, same tick -- report right here rather than leaving it for
+      // requestAgentGoal's catch-all, which only ever sees whatever agentGoal is active
+      // *then* (already "advance" by the time it runs, since the line below falls through
+      // immediately) and would otherwise never learn whether use_dash actually fired.
+      if (this.agentGoalDecisionId != null) {
+        this.reportDecisionOutcome(this.agentGoalDecisionId, usable ? "goal_completed" : "goal_abandoned");
+        this.agentGoalDecisionId = null;
+      }
       this.agentGoal = "advance";
     } else if (this.agentGoal === "use_ultra") {
-      if (this.player.ultraMove && this.player.ultraCooldown <= 0) this.tryUltraMove();
+      const usable = this.player.ultraMove && this.player.ultraCooldown <= 0;
+      if (usable) this.tryUltraMove();
+      if (this.agentGoalDecisionId != null) {
+        this.reportDecisionOutcome(this.agentGoalDecisionId, usable ? "goal_completed" : "goal_abandoned");
+        this.agentGoalDecisionId = null;
+      }
       this.agentGoal = "advance";
     } else if (this.agentGoal === "collect_pickup") {
       const candidates = this.pickups.filter((p) => !p.collected && p !== this.agentAbandonedPickup);
@@ -3470,6 +3503,10 @@ export class GameWorld {
           this.agentAbandonedPickup = target;
           this.agentAbandonedPickupCooldown = AGENT_ABANDON_COOLDOWN;
           this.agentGoalTimer = Math.min(this.agentGoalTimer, 0.4);
+          if (this.agentGoalDecisionId != null) {
+            this.reportDecisionOutcome(this.agentGoalDecisionId, "goal_abandoned");
+            this.agentGoalDecisionId = null;
+          }
           this.logAgent(`⚠ gave up on ${target.kind} after ${AGENT_TARGET_CHASE_TIMEOUT}s -- picking a new priority`);
         }
       }
@@ -3499,6 +3536,10 @@ export class GameWorld {
           this.agentAbandonedEnemy = target;
           this.agentAbandonedEnemyCooldown = AGENT_ABANDON_COOLDOWN;
           this.agentGoalTimer = Math.min(this.agentGoalTimer, 0.4);
+          if (this.agentGoalDecisionId != null) {
+            this.reportDecisionOutcome(this.agentGoalDecisionId, "goal_abandoned");
+            this.agentGoalDecisionId = null;
+          }
           this.logAgent(`⚠ gave up chasing ${target.kind} after ${AGENT_TARGET_CHASE_TIMEOUT}s -- picking a new priority`);
         }
       }
@@ -3594,14 +3635,30 @@ export class GameWorld {
       .then((res) => (res.ok ? res.json() : null))
       .then((response: { choice?: AgentGoal | null; decisionId?: number; disagreesWithMemory?: boolean; prompt?: string; raw?: string | null } | null) => {
         if (this.disposed) return;
-        // The outgoing goal reached the end of its window without damagePlayer ever
-        // reporting against it, i.e. it went fine -- close it out as a positive outcome
-        // before the id gets overwritten below. See this field's own docstring.
-        if (this.agentGoalDecisionId != null) this.reportDecisionOutcome(this.agentGoalDecisionId, "avoided");
+        // The outgoing goal reached the end of its window without anything else (damage,
+        // collection, defeat, a chase timeout) already closing its outcome out -- see
+        // collectPickup/defeatEnemy/steerByGoal's chase-timeout blocks for the specific
+        // hooks that report and null this out early when they fire. What's left here is
+        // exactly the goals with no earlier resolution event.
+        if (this.agentGoalDecisionId != null) {
+          if (this.agentGoal === "advance") {
+            // No discrete "did it work" event for advance beyond real forward movement --
+            // AGENT_STALL_DISTANCE is the engine's own existing bar for "that's real
+            // progress, not noise" (see checkAgentStall), reused here rather than a new
+            // arbitrary threshold.
+            const progressed = this.player.x - this.agentGoalStartX > AGENT_STALL_DISTANCE;
+            this.reportDecisionOutcome(this.agentGoalDecisionId, progressed ? "goal_completed" : "goal_abandoned");
+          }
+          // Anything else still open here (collect_pickup/engage_enemy the model itself
+          // moved on from before either succeeding or timing out) is genuinely ambiguous --
+          // left as "unknown" rather than guessed at, same as queryOutcomeCounts already
+          // excludes unknown rows from the posterior it builds.
+        }
         if (response?.choice) this.agentRealAnswers += 1;
         else this.agentScriptedAnswers += 1;
         this.agentGoal = response?.choice ?? "advance";
         this.agentGoalDecisionId = response?.decisionId ?? null;
+        this.agentGoalStartX = this.player.x;
         this.setAgentActivity(this.activityForGoal(this.agentGoal), this.labelForGoal(this.agentGoal));
         this.logAgent(
           response?.choice
@@ -3617,6 +3674,7 @@ export class GameWorld {
         if (this.disposed || error?.name === "AbortError") return; // quit() cancelled this on purpose
         this.agentScriptedAnswers += 1;
         this.agentGoal = "advance";
+        this.agentGoalStartX = this.player.x;
         this.setAgentActivity("fallback", "ADVANCING");
         this.logAgent("⚠ goal fallback: advance (request failed)");
       })
@@ -3936,7 +3994,7 @@ export class GameWorld {
    * -- this is what actually closes the loop back to history.ts's recordOutcome, feeding
    * the Bayesian bandit (see decide.ts's getMemory/thompsonSample) real data instead of
    * every row sitting at "unknown" forever. */
-  private reportDecisionOutcome(decisionId: number, outcome: "enemy_defeated" | "player_damaged" | "avoided") {
+  private reportDecisionOutcome(decisionId: number, outcome: "enemy_defeated" | "player_damaged" | "avoided" | "goal_completed" | "goal_abandoned") {
     fetch(`/api/agent/decide/${decisionId}/outcome`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -4708,6 +4766,16 @@ export class GameWorld {
     this.player.vy = 6.1;
     if (enemy.bossTier === "boss") this.bossDefeated = true;
     if (this.isAgentRun) this.reportAgentOutcome(enemy, "enemy_defeated");
+    // Separate from the enemyResponse report just above (agentAskedEnemies, keyed by which
+    // enemy an enemyResponse decision was asked about) -- this one closes out the
+    // priorityAction "engage_enemy" goal itself, if this enemy was that goal's actual
+    // sticky target. The two decisions are independent rows and can both be open at once.
+    if (this.isAgentRun && this.agentGoal === "engage_enemy" && enemy === this.agentEnemyTarget && this.agentGoalDecisionId != null) {
+      this.reportDecisionOutcome(this.agentGoalDecisionId, "goal_completed");
+      this.agentGoalDecisionId = null;
+      this.agentEnemyTarget = null;
+      this.agentTargetChaseTimer = 0;
+    }
     this.enemiesDefeated += 1;
     this.buttons += enemy.bossTier === "boss" ? 20 : enemy.bossTier === "mini" ? 8 : 4;
     this.message = enemy.bossTier === "boss"
@@ -4820,6 +4888,16 @@ export class GameWorld {
   }
 
   private collectPickup(pickup: Pickup) {
+    // Report before the general bookkeeping below so this closes the loop even if the
+    // pickup's own kind-specific branch further down does something unrelated first --
+    // only the specific pickup the current collect_pickup goal was actually chasing counts
+    // (grabbing an unrelated one in passing doesn't validate the model's choice).
+    if (this.isAgentRun && this.agentGoal === "collect_pickup" && pickup === this.agentPickupTarget && this.agentGoalDecisionId != null) {
+      this.reportDecisionOutcome(this.agentGoalDecisionId, "goal_completed");
+      this.agentGoalDecisionId = null;
+      this.agentPickupTarget = null;
+      this.agentTargetChaseTimer = 0;
+    }
     pickup.collected = true;
     pickup.root.setEnabled(false);
     this.audio.playCollect(pickup.kind);
