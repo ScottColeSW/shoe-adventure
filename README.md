@@ -8,6 +8,9 @@ The Right Shoe is on a full-screen nighttime mission through a toy-scale bedroom
 
 ![Shoe Adventure](https://img.shields.io/badge/Shoe%20Adventure-Playful%20Rescue%20Platformer-FF5A4F?style=for-the-badge)
 
+[![License](https://img.shields.io/github/license/ScottColeSW/shoe-adventure)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/ScottColeSW/shoe-adventure)](https://github.com/ScottColeSW/shoe-adventure/releases/latest)
+
 </div>
 
 ## 🎮 What this is
