@@ -141,6 +141,15 @@ pnpm start
 - an in-game settings screen for volume and mute, rather than a single mute button
 - a more formal deploy-ready pipeline
 
+## About the creator
+
+Built by **Scott A. Cole**, an AI strategy consultant and the author of 31 books on AI strategy, GenAI, and
+decision-making, including the five-book [**Stop Learning AI** series](https://www.amazon.com/dp/B0GPRFYCQF?&linkCode=ll2&tag=ifio42-20&linkId=b67e3c17a4eb0539b2ec9ec37ef410e4&language=en_US&ref_=as_li_ss_tl) for executives who need to
+make good AI decisions without becoming technical themselves. The app includes an **About** page and a **Books** page listing every title and edition ([`client/about.html`](client/about.html), [`client/books.html`](client/books.html), reachable from the game's ABOUT link or at `/about.html` and `/books.html` on the dev server). More projects, including [Aegis Vector](https://github.com/ScottColeSW/Project-Aegis-Vector) and [Palimpsest](https://github.com/ScottColeSW/Palimpsest), are at
+[github.com/ScottColeSW](https://github.com/ScottColeSW).
+
+<sub>As an Amazon Associate I earn from qualifying purchases.</sub>
+
 ## License
 
 MIT
